@@ -173,6 +173,9 @@ export class GrokMarketplaceAdapter implements SourceAdapter {
   }
 
   async getTemplate(source: SourceIdentity): Promise<BotTemplateManifest> {
+    if (source.provider !== this.source) throw new RangeError(`Expected source provider ${this.source}`);
+    if (!this.#slugs.has(source.externalId)) await this.listTemplates();
+    if (!this.#slugs.has(source.externalId)) throw new RangeError(`Unknown ${this.source} source identifier ${source.externalId}`);
     const document = await this.fetchTemplate(source);
     return this.normalizeTemplate(document, document.retrievedAt);
   }

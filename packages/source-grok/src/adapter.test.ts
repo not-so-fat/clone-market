@@ -26,6 +26,23 @@ function response(body: string, status = 200): FetchResponse {
   return { ok: status >= 200 && status < 300, status, text: async () => body };
 }
 
+function sampleIndexItem(id = "bot-one", slug = "one") {
+  return {
+    id,
+    slug,
+    name: "One",
+    description: "Text containing ]) must not terminate a Flight frame.",
+    creator: { id: "creator-one", displayName: "Creator One" },
+    categories: ["Productivity"],
+    installCount: 0,
+    placements: [],
+  };
+}
+
+function flightHtml(...chunks: string[]): string {
+  return `<html><body><script>${chunks.map((chunk) => `self.__next_f.push(${JSON.stringify([1, chunk])});`).join("")}</script></body></html>`;
+}
+
 describe("captured Marketplace index", () => {
   it("reconciles all 89 unique identifiers and Featured placement without a default cap", async () => {
     const body = await fixture("marketplace-index-2026-10-02.html");
@@ -68,6 +85,15 @@ describe("captured Marketplace index", () => {
     expect([...first.templates, ...second.templates, ...third.templates]).toHaveLength(89);
     expect(third.nextCursor).toBeUndefined();
   });
+
+  it("joins ordered Flight push chunks before decoding a split index row", () => {
+    const payload = `7:${JSON.stringify({ marketplaceBots: [sampleIndexItem()], featuredBotIds: ["bot-one"] })}`;
+    const splitAt = payload.indexOf("must not") + 4;
+    const parsed = parseIndex(document(flightHtml(payload.slice(0, splitAt), payload.slice(splitAt))));
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.template.featured).toBe(true);
+  });
 });
 
 describe("detail normalization", () => {
@@ -93,22 +119,38 @@ describe("detail normalization", () => {
   });
 
   it("fetches and normalizes through the injected client boundary", async () => {
-    const body = await fixture("template-full-featured.html");
-    const adapter = new GrokMarketplaceAdapter({ fetch: async () => response(body), now: () => retrievedAt });
-    const manifest = await adapter.getTemplate({ provider: adapter.source, externalId: "project-steward" });
-    expect(manifest.source.externalId).toBe("project-steward");
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const detail = (await fixture("template-full-featured.html"))
+      .replaceAll("project-steward-public", "projects-manager")
+      .replaceAll("project-steward", "bot-projects-manager-20261002");
+    const urls: string[] = [];
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async (url) => {
+        urls.push(url);
+        return response(urls.length === 1 ? index : detail);
+      },
+      now: () => retrievedAt,
+    });
+    const manifest = await adapter.getTemplate({ provider: adapter.source, externalId: "bot-projects-manager-20261002" });
+    expect(manifest.source.externalId).toBe("bot-projects-manager-20261002");
     expect(adapter.getSourceMetadata(manifest.source)?.installCount).toBe(0);
+    expect(urls).toEqual([
+      "https://x.ai/bot/marketplace/",
+      "https://x.ai/bot/marketplace/bots/projects-manager",
+    ]);
   });
 
   it("rejects a detail payload whose id does not match the requested source", async () => {
-    const body = await fixture("template-full-featured.html");
-    const adapter = new GrokMarketplaceAdapter({ fetch: async () => response(body), now: () => retrievedAt });
-    await expect(adapter.getTemplate({ provider: adapter.source, externalId: "wrong-id" })).rejects.toMatchObject({
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const detail = await fixture("template-full-featured.html");
+    let calls = 0;
+    const adapter = new GrokMarketplaceAdapter({ fetch: async () => response(calls++ === 0 ? index : detail), now: () => retrievedAt });
+    await expect(adapter.getTemplate({ provider: adapter.source, externalId: "bot-projects-manager-20261002" })).rejects.toMatchObject({
       diagnostic: {
         code: "source_schema_drift",
         path: "$rsc.0.0.marketplaceBot.id",
-        expected: "requested source identifier wrong-id",
-        source: { provider: "grok-marketplace", externalId: "wrong-id" },
+        expected: "requested source identifier bot-projects-manager-20261002",
+        source: { provider: "grok-marketplace", externalId: "bot-projects-manager-20261002" },
         retrievedAt,
       },
     });
@@ -132,6 +174,51 @@ describe("detail normalization", () => {
 });
 
 describe("schema drift diagnostics", () => {
+  it("rejects an index with no observable Featured placement signal", async () => {
+    const valid = await fixture("marketplace-index-2026-10-02.html");
+    const missingFeaturedIds = valid.replace(/,\n  "featuredBotIds": \[[\s\S]*?\n  \]\n}/, "\n}");
+
+    expect(() => parseIndex(document(missingFeaturedIds))).toThrowError(SourceSchemaDriftError);
+    try {
+      parseIndex(document(missingFeaturedIds));
+    } catch (error) {
+      expect(error).toMatchObject({
+        diagnostic: {
+          code: "source_schema_drift",
+          path: "$rsc.0.0.marketplaceBots",
+          expected: expect.stringContaining("Featured placement signal"),
+          source: { provider: "grok-marketplace", externalId: "index" },
+          url: "https://x.ai/bot/marketplace/",
+          retrievedAt,
+        },
+      });
+    }
+  });
+
+  it("rejects ambiguous index candidates instead of accepting an earlier partial list", () => {
+    const item = sampleIndexItem();
+    const ambiguous = `7:${JSON.stringify({
+      marketplaceBots: [item],
+      carousel: { bots: [{ ...item, id: "bot-two", slug: "two" }] },
+      featuredBotIds: ["bot-one"],
+    })}`;
+
+    expect(() => parseIndex(document(flightHtml(ambiguous)))).toThrowError(SourceSchemaDriftError);
+    try {
+      parseIndex(document(flightHtml(ambiguous)));
+    } catch (error) {
+      expect(error).toMatchObject({
+        diagnostic: {
+          code: "source_schema_drift",
+          path: "$",
+          expected: expect.stringContaining("one unambiguous RSC property"),
+          source: { provider: "grok-marketplace", externalId: "index" },
+          retrievedAt,
+        },
+      });
+    }
+  });
+
   it("rejects duplicate source IDs without returning a partial index", async () => {
     const valid = await fixture("marketplace-index-2026-10-02.html");
     const duplicate = valid.replace('"id": "bot-tinkabot-20261002"', '"id": "bot-projects-manager-20261002"');

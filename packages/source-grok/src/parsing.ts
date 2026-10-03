@@ -64,17 +64,54 @@ function source(externalId: string): SourceIdentity {
   return { provider: PROVIDER, externalId };
 }
 
+function balancedJsonAt(input: string, start: number): string | undefined {
+  const opening = input[start];
+  if (opening !== "[" && opening !== "{") return undefined;
+  const stack: string[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < input.length; index += 1) {
+    const character = input[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === "{" || character === "[") stack.push(character);
+    else if (character === "}" || character === "]") {
+      const expected = character === "}" ? "{" : "[";
+      if (stack.pop() !== expected) return undefined;
+      if (stack.length === 0) return input.slice(start, index + 1);
+    }
+  }
+  return undefined;
+}
+
 function flightChunks(body: string): string[] {
-  const chunks: string[] = [];
-  const pattern = /self\.__next_f\.push\((\[[\s\S]*?\])\)\s*;?/g;
-  for (const match of body.matchAll(pattern)) {
+  const pushChunks: string[] = [];
+  const marker = "self.__next_f.push(";
+  let searchFrom = 0;
+  while (searchFrom < body.length) {
+    const markerIndex = body.indexOf(marker, searchFrom);
+    if (markerIndex < 0) break;
+    let frameStart = markerIndex + marker.length;
+    while (/\s/.test(body[frameStart] ?? "")) frameStart += 1;
+    const encodedFrame = balancedJsonAt(body, frameStart);
+    if (encodedFrame === undefined) {
+      searchFrom = frameStart;
+      continue;
+    }
     try {
-      const frame = JSON.parse(match[1] ?? "") as unknown;
-      if (Array.isArray(frame) && typeof frame[1] === "string") chunks.push(frame[1]);
+      const frame = JSON.parse(encodedFrame) as unknown;
+      if (Array.isArray(frame) && frame[0] === 1 && typeof frame[1] === "string") pushChunks.push(frame[1]);
     } catch {
       // The caller emits one typed document-level drift if no usable value remains.
     }
+    searchFrom = frameStart + encodedFrame.length;
   }
+  const chunks = pushChunks.length === 0 ? [] : [pushChunks.join("")];
   for (const match of body.matchAll(/<script[^>]+type=["']text\/x-component["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     if (match[1] !== undefined) chunks.push(match[1]);
   }
@@ -125,36 +162,37 @@ function rscValues(document: RawGrokDocument): LocatedValue[] {
   return located;
 }
 
-function walk(value: unknown, path: string, visit: (record: JsonRecord, path: string) => LocatedValue | undefined): LocatedValue | undefined {
-  if (value === null || typeof value !== "object") return undefined;
+function walk(value: unknown, path: string, visit: (record: JsonRecord, path: string) => LocatedValue[]): LocatedValue[] {
+  if (value === null || typeof value !== "object") return [];
   if (Array.isArray(value)) {
+    const found: LocatedValue[] = [];
     for (let index = 0; index < value.length; index += 1) {
-      const found = walk(value[index], `${path}.${index}`, visit);
-      if (found !== undefined) return found;
+      found.push(...walk(value[index], `${path}.${index}`, visit));
     }
-    return undefined;
+    return found;
   }
   const object = value as JsonRecord;
-  const direct = visit(object, path);
-  if (direct !== undefined) return direct;
+  const found = visit(object, path);
   for (const [key, child] of Object.entries(object)) {
-    const found = walk(child, `${path}.${key}`, visit);
-    if (found !== undefined) return found;
+    found.push(...walk(child, `${path}.${key}`, visit));
   }
-  return undefined;
+  return found;
 }
 
 function locateProperty(document: RawGrokDocument, keys: readonly string[]): LocatedValue {
+  const matches: LocatedValue[] = [];
   for (const root of rscValues(document)) {
-    const found = walk(root.value, root.path, (candidate, path) => {
+    matches.push(...walk(root.value, root.path, (candidate, path) => {
+      const direct: LocatedValue[] = [];
       for (const key of keys) {
-        if (Object.hasOwn(candidate, key)) return { value: candidate[key], path: `${path}.${key}` };
+        if (Object.hasOwn(candidate, key)) direct.push({ value: candidate[key], path: `${path}.${key}` });
       }
-      return undefined;
-    });
-    if (found !== undefined) return found;
+      return direct;
+    }));
   }
-  return drift(document, "$", `RSC property ${keys.join(" or ")}`, undefined);
+  if (matches.length === 0) return drift(document, "$", `RSC property ${keys.join(" or ")}`, undefined);
+  if (matches.length > 1) return drift(document, "$", `one unambiguous RSC property ${keys.join(" or ")}`, matches);
+  return matches[0]!;
 }
 
 function parseCreator(value: unknown, path: string, metadata: GrokRetrievalMetadata): { id?: string; name: string } {
@@ -174,8 +212,10 @@ function parseBase(value: unknown, path: string, metadata: GrokRetrievalMetadata
   const categories = item.categories === undefined ? undefined : stringArray(item.categories, `${path}.categories`, metadata);
   const installCount = number(item.installCount, `${path}.installCount`, metadata);
   const placements = item.placements === undefined ? [] : stringArray(item.placements, `${path}.placements`, metadata);
+  if (item.featured !== undefined && typeof item.featured !== "boolean") drift(metadata, `${path}.featured`, "boolean", item.featured);
   const featured = featuredIds?.has(externalId) === true || featuredIds?.has(slug) === true || item.featured === true || placements.includes("featured");
-  return { item, externalId, slug, name, summary, creator, categories, installCount, featured };
+  const hasFeaturedSignal = typeof item.featured === "boolean" || placements.includes("featured");
+  return { item, externalId, slug, name, summary, creator, categories, installCount, featured, hasFeaturedSignal };
 }
 
 function normalizeTemplate(base: ReturnType<typeof parseBase>, metadata: GrokRetrievalMetadata): Template {
@@ -207,15 +247,21 @@ export function parseIndex(document: RawGrokDocument): ParsedTemplate[] {
   const featuredIds = new Set(featuredLocation === undefined ? [] : stringArray(featuredLocation.value, featuredLocation.path, document));
   const seenIds = new Set<string>();
   const seenSlugs = new Set<string>();
-  return entries.map((entry, index) => {
+  let hasPerItemFeaturedSignal = false;
+  const parsed = entries.map((entry, index) => {
     const path = `${located.path}.${index}`;
     const base = parseBase(entry, path, document, featuredIds);
+    hasPerItemFeaturedSignal ||= base.hasFeaturedSignal;
     if (seenIds.has(base.externalId)) drift(document, `${path}.id`, "unique source identifier", base.externalId);
     if (seenSlugs.has(base.slug)) drift(document, `${path}.slug`, "unique public slug", base.slug);
     seenIds.add(base.externalId);
     seenSlugs.add(base.slug);
     return { template: normalizeTemplate(base, document), installCount: base.installCount, slug: base.slug };
   });
+  if (featuredLocation === undefined && !hasPerItemFeaturedSignal) {
+    drift(document, located.path, "Featured placement signal (featuredBotIds, featuredIds, item.featured, or featured placement)", undefined);
+  }
+  return parsed;
 }
 
 function componentArray<T>(input: unknown, path: string, metadata: GrokRetrievalMetadata, parser: (item: JsonRecord, itemPath: string) => T): T[] | undefined {
