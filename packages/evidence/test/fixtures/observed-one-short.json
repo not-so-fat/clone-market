@@ -1,0 +1,4 @@
+[
+  { "id": "try-1", "type": "trying_or_installed", "claim": "Installed it for planning.", "publishedAt": "2026-09-01T10:00:00.000Z" },
+  { "id": "repeat-1", "type": "repeated_use", "claim": "Still using it every week.", "publishedAt": "2026-09-03T10:00:00.000Z" }
+]

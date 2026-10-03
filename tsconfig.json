@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/compatibility" },
     { "path": "packages/catalog" },
+    { "path": "packages/evidence" },
     { "path": "packages/source-grok" },
     { "path": "fixtures/consumer" }
   ]
