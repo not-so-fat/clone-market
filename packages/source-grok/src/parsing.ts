@@ -3,15 +3,15 @@ import { SCHEMA_VERSION, type BotTemplateManifest, type SourceIdentity, type Tem
 import { SourceSchemaDriftError, type GrokRetrievalMetadata } from "./errors.js";
 
 type JsonRecord = Record<string, unknown>;
+type LocatedValue = { path: string; value: unknown };
 
 export type RawGrokDocument = GrokRetrievalMetadata & { body: string };
-export type ParsedTemplate = { template: Template; installCount: number };
+export type ParsedTemplate = { template: Template; installCount: number; slug: string };
 export type ParsedManifest = { manifest: BotTemplateManifest; installCount: number };
 
 const PROVIDER = "grok-marketplace";
-const INDEX_MARKER = "__GROK_MARKETPLACE_INDEX__";
-const DETAIL_MARKER = "__GROK_MARKETPLACE_DETAIL__";
-const END_MARKER = "__END_GROK_MARKETPLACE__";
+const INDEX_KEYS = ["marketplaceBots", "initialBots", "allBots", "templates", "bots"] as const;
+const DETAIL_KEYS = ["marketplaceBot", "botData", "template", "bot"] as const;
 
 function actual(value: unknown): string {
   if (value === null) return "null";
@@ -64,44 +64,107 @@ function source(externalId: string): SourceIdentity {
   return { provider: PROVIDER, externalId };
 }
 
-function decodeFlightChunks(body: string): string {
-  let decoded = "";
+function flightChunks(body: string): string[] {
+  const chunks: string[] = [];
   const pattern = /self\.__next_f\.push\((\[[\s\S]*?\])\)\s*;?/g;
   for (const match of body.matchAll(pattern)) {
     try {
       const frame = JSON.parse(match[1] ?? "") as unknown;
-      if (Array.isArray(frame) && typeof frame[1] === "string") decoded += frame[1];
+      if (Array.isArray(frame) && typeof frame[1] === "string") chunks.push(frame[1]);
     } catch {
-      // A malformed flight frame will be reported as a missing payload marker below.
+      // The caller emits one typed document-level drift if no usable value remains.
     }
   }
-  return decoded;
+  for (const match of body.matchAll(/<script[^>]+type=["']text\/x-component["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    if (match[1] !== undefined) chunks.push(match[1]);
+  }
+  return chunks;
 }
 
-function payload(document: RawGrokDocument, marker: string): JsonRecord {
-  const decoded = decodeFlightChunks(document.body);
-  const searchable = decoded.length > 0 ? decoded : document.body;
-  const start = searchable.indexOf(marker);
-  if (start < 0) drift(document, "$", `RSC payload marker ${marker}`, undefined);
-  const jsonStart = start + marker.length;
-  const end = searchable.indexOf(END_MARKER, jsonStart);
-  if (end < 0) drift(document, "$", `RSC payload terminator ${END_MARKER}`, undefined);
-  try {
-    return record(JSON.parse(searchable.slice(jsonStart, end)), "$", document);
-  } catch (error) {
-    if (error instanceof SourceSchemaDriftError) throw error;
-    drift(document, "$", "valid JSON RSC payload", searchable.slice(jsonStart, end));
+function jsonValues(chunk: string): unknown[] {
+  const values: unknown[] = [];
+  for (let start = 0; start < chunk.length; start += 1) {
+    const opening = chunk[start];
+    if (opening !== "{" && opening !== "[") continue;
+    const stack: string[] = [];
+    let quoted = false;
+    let escaped = false;
+    for (let end = start; end < chunk.length; end += 1) {
+      const character = chunk[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') quoted = false;
+        continue;
+      }
+      if (character === '"') quoted = true;
+      else if (character === "{" || character === "[") stack.push(character);
+      else if (character === "}" || character === "]") {
+        const expected = character === "}" ? "{" : "[";
+        if (stack.pop() !== expected) break;
+        if (stack.length === 0) {
+          try {
+            values.push(JSON.parse(chunk.slice(start, end + 1)) as unknown);
+            start = end;
+          } catch {
+            // Flight also contains non-data rows; continue looking for JSON values.
+          }
+          break;
+        }
+      }
+    }
   }
+  return values;
+}
+
+function rscValues(document: RawGrokDocument): LocatedValue[] {
+  const located = flightChunks(document.body).flatMap((chunk, chunkIndex) =>
+    jsonValues(chunk).map((value, valueIndex) => ({ value, path: `$rsc.${chunkIndex}.${valueIndex}` })),
+  );
+  if (located.length === 0) drift(document, "$", "decodable Next.js Flight JSON payload", undefined);
+  return located;
+}
+
+function walk(value: unknown, path: string, visit: (record: JsonRecord, path: string) => LocatedValue | undefined): LocatedValue | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const found = walk(value[index], `${path}.${index}`, visit);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const object = value as JsonRecord;
+  const direct = visit(object, path);
+  if (direct !== undefined) return direct;
+  for (const [key, child] of Object.entries(object)) {
+    const found = walk(child, `${path}.${key}`, visit);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function locateProperty(document: RawGrokDocument, keys: readonly string[]): LocatedValue {
+  for (const root of rscValues(document)) {
+    const found = walk(root.value, root.path, (candidate, path) => {
+      for (const key of keys) {
+        if (Object.hasOwn(candidate, key)) return { value: candidate[key], path: `${path}.${key}` };
+      }
+      return undefined;
+    });
+    if (found !== undefined) return found;
+  }
+  return drift(document, "$", `RSC property ${keys.join(" or ")}`, undefined);
 }
 
 function parseCreator(value: unknown, path: string, metadata: GrokRetrievalMetadata): { id?: string; name: string } {
   const creator = record(value, path, metadata);
   const id = optionalString(creator.id, `${path}.id`, metadata);
-  const name = string(creator.displayName, `${path}.displayName`, metadata);
+  const name = string(creator.displayName ?? creator.name, `${path}.displayName`, metadata);
   return id === undefined ? { name } : { id, name };
 }
 
-function parseBase(value: unknown, path: string, metadata: GrokRetrievalMetadata) {
+function parseBase(value: unknown, path: string, metadata: GrokRetrievalMetadata, featuredIds?: ReadonlySet<string>) {
   const item = record(value, path, metadata);
   const externalId = string(item.id, `${path}.id`, metadata);
   const slug = string(item.slug, `${path}.slug`, metadata);
@@ -110,14 +173,15 @@ function parseBase(value: unknown, path: string, metadata: GrokRetrievalMetadata
   const creator = parseCreator(item.creator, `${path}.creator`, metadata);
   const categories = item.categories === undefined ? undefined : stringArray(item.categories, `${path}.categories`, metadata);
   const installCount = number(item.installCount, `${path}.installCount`, metadata);
-  const placements = stringArray(item.placements, `${path}.placements`, metadata);
-  return { item, externalId, slug, name, summary, creator, categories, installCount, featured: placements.includes("featured") };
+  const placements = item.placements === undefined ? [] : stringArray(item.placements, `${path}.placements`, metadata);
+  const featured = featuredIds?.has(externalId) === true || featuredIds?.has(slug) === true || item.featured === true || placements.includes("featured");
+  return { item, externalId, slug, name, summary, creator, categories, installCount, featured };
 }
 
 function normalizeTemplate(base: ReturnType<typeof parseBase>, metadata: GrokRetrievalMetadata): Template {
   const identity = source(base.externalId);
   const url = metadata.source.externalId === "index"
-    ? new URL(base.slug, metadata.url.endsWith("/") ? metadata.url : `${metadata.url}/`).toString()
+    ? new URL(`bots/${encodeURIComponent(base.slug)}`, metadata.url.endsWith("/") ? metadata.url : `${metadata.url}/`).toString()
     : metadata.url;
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -134,17 +198,23 @@ function normalizeTemplate(base: ReturnType<typeof parseBase>, metadata: GrokRet
 }
 
 export function parseIndex(document: RawGrokDocument): ParsedTemplate[] {
-  const root = payload(document, INDEX_MARKER);
-  const marketplace = record(root.marketplace, "marketplace", document);
-  if (marketplace.complete !== true) drift(document, "marketplace.complete", "literal true", marketplace.complete);
-  const entries = array(marketplace.templates, "marketplace.templates", document);
-  const seen = new Set<string>();
+  const located = locateProperty(document, INDEX_KEYS);
+  const entries = array(located.value, located.path, document);
+  let featuredLocation: LocatedValue | undefined;
+  try { featuredLocation = locateProperty(document, ["featuredBotIds", "featuredIds"]); } catch (error) {
+    if (!(error instanceof SourceSchemaDriftError)) throw error;
+  }
+  const featuredIds = new Set(featuredLocation === undefined ? [] : stringArray(featuredLocation.value, featuredLocation.path, document));
+  const seenIds = new Set<string>();
+  const seenSlugs = new Set<string>();
   return entries.map((entry, index) => {
-    const path = `marketplace.templates.${index}`;
-    const base = parseBase(entry, path, document);
-    if (seen.has(base.externalId)) drift(document, `${path}.id`, "unique source identifier", base.externalId);
-    seen.add(base.externalId);
-    return { template: normalizeTemplate(base, document), installCount: base.installCount };
+    const path = `${located.path}.${index}`;
+    const base = parseBase(entry, path, document, featuredIds);
+    if (seenIds.has(base.externalId)) drift(document, `${path}.id`, "unique source identifier", base.externalId);
+    if (seenSlugs.has(base.slug)) drift(document, `${path}.slug`, "unique public slug", base.slug);
+    seenIds.add(base.externalId);
+    seenSlugs.add(base.slug);
+    return { template: normalizeTemplate(base, document), installCount: base.installCount, slug: base.slug };
   });
 }
 
@@ -154,42 +224,33 @@ function componentArray<T>(input: unknown, path: string, metadata: GrokRetrieval
 }
 
 export function parseDetail(document: RawGrokDocument): ParsedManifest {
-  const root = payload(document, DETAIL_MARKER);
-  const marketplace = record(root.marketplace, "marketplace", document);
-  const base = parseBase(marketplace.template, "marketplace.template", document);
-  const path = "marketplace.template";
+  const located = locateProperty(document, DETAIL_KEYS);
+  const base = parseBase(located.value, located.path, document);
+  const path = located.path;
+  if (document.source.externalId !== "unknown" && document.source.externalId !== base.externalId) {
+    drift(document, `${path}.id`, `requested source identifier ${document.source.externalId}`, base.externalId);
+  }
   const unavailableFields: string[] = [];
   if (base.summary === undefined) unavailableFields.push("template.summary");
   if (base.categories === undefined) unavailableFields.push("template.categories");
   if (base.creator.id === undefined) unavailableFields.push("template.creator.id");
   const instructions = optionalString(base.item.systemPrompt, `${path}.systemPrompt`, document);
   if (instructions === undefined) unavailableFields.push("instructions");
-
   const memories = componentArray(base.item.memories, `${path}.memories`, document, (item, itemPath) => ({
-    id: string(item.id, `${itemPath}.id`, document),
-    name: string(item.name, `${itemPath}.name`, document),
-    content: string(item.content, `${itemPath}.content`, document),
+    id: string(item.id, `${itemPath}.id`, document), name: string(item.name, `${itemPath}.name`, document), content: string(item.content, `${itemPath}.content`, document),
   }));
   const skills = componentArray(base.item.skills, `${path}.skills`, document, (item, itemPath) => {
     const skillInstructions = optionalString(item.instructions, `${itemPath}.instructions`, document);
-    const skill = {
-      id: string(item.id, `${itemPath}.id`, document),
-      name: string(item.name, `${itemPath}.name`, document),
-      description: string(item.description, `${itemPath}.description`, document),
-    };
+    const skill = { id: string(item.id, `${itemPath}.id`, document), name: string(item.name, `${itemPath}.name`, document), description: string(item.description, `${itemPath}.description`, document) };
     return skillInstructions === undefined ? skill : { ...skill, instructions: skillInstructions };
   });
   const routines = componentArray(base.item.routines, `${path}.routines`, document, (item, itemPath) => ({
-    id: string(item.id, `${itemPath}.id`, document),
-    name: string(item.name, `${itemPath}.name`, document),
-    instructions: string(item.instructions, `${itemPath}.instructions`, document),
+    id: string(item.id, `${itemPath}.id`, document), name: string(item.name, `${itemPath}.name`, document), instructions: string(item.instructions, `${itemPath}.instructions`, document),
   }));
   const integrations = componentArray(base.item.integrations, `${path}.integrations`, document, (item, itemPath) => ({
-    id: string(item.id, `${itemPath}.id`, document),
-    name: string(item.name, `${itemPath}.name`, document),
+    id: string(item.id, `${itemPath}.id`, document), name: string(item.name, `${itemPath}.name`, document),
     required: item.required === true ? true : item.required === false ? false : drift(document, `${itemPath}.required`, "boolean", item.required),
   }));
-
   if (memories === undefined) unavailableFields.push("memories");
   if (skills === undefined) unavailableFields.push("skills");
   if (routines === undefined) unavailableFields.push("routines");
@@ -198,18 +259,8 @@ export function parseDetail(document: RawGrokDocument): ParsedManifest {
   const manifestBase = {
     schemaVersion: SCHEMA_VERSION,
     id: `${PROVIDER}:${base.externalId}:manifest`,
-    source: source(base.externalId),
-    retrievedAt: document.retrievedAt,
-    provenanceUrl: template.provenance.url,
-    template,
-    memories: memories ?? [],
-    skills: skills ?? [],
-    routines: routines ?? [],
-    integrations: integrations ?? [],
-    unavailableFields,
+    source: source(base.externalId), retrievedAt: document.retrievedAt, provenanceUrl: template.provenance.url, template,
+    memories: memories ?? [], skills: skills ?? [], routines: routines ?? [], integrations: integrations ?? [], unavailableFields,
   };
-  return {
-    manifest: instructions === undefined ? manifestBase : { ...manifestBase, instructions },
-    installCount: base.installCount,
-  };
+  return { manifest: instructions === undefined ? manifestBase : { ...manifestBase, instructions }, installCount: base.installCount };
 }

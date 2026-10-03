@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { BotTemplateManifestSchema, type SourceAdapter, type SourceIdentity } from "@clone-market/core";
 import { describe, expect, it } from "vitest";
 
-import { GrokMarketplaceAdapter, SourceRequestError, SourceSchemaDriftError, type FetchClient, type FetchResponse } from "./index.js";
+import { GrokMarketplaceAdapter, SourceRequestError, SourceSchemaDriftError, runLiveSmoke, type FetchClient, type FetchResponse } from "./index.js";
 import { parseDetail, parseIndex, type RawGrokDocument } from "./parsing.js";
 
 const retrievedAt = "2026-10-02T18:30:00.000Z";
@@ -18,7 +18,7 @@ function document(body: string, externalId = "index"): RawGrokDocument {
     body,
     retrievedAt,
     source: { provider: "grok-marketplace", externalId },
-    url: externalId === "index" ? "https://grok.com/marketplace/" : `https://grok.com/marketplace/${externalId}`,
+    url: externalId === "index" ? "https://x.ai/bot/marketplace/" : `https://x.ai/bot/marketplace/bots/${externalId}`,
   };
 }
 
@@ -34,9 +34,10 @@ describe("captured Marketplace index", () => {
     expect(parsed).toHaveLength(89);
     expect(new Set(parsed.map(({ template }) => template.provenance.source.externalId))).toHaveLength(89);
     expect(parsed.filter(({ template }) => template.featured).map(({ template }) => template.provenance.source.externalId)).toEqual([
-      "template-001", "template-002", "template-003", "template-004",
-      "template-005", "template-006", "template-007", "template-008",
+      "bot-projects-manager-20261002", "bot-tinkabot-20261002",
+      "bot-dr-eggbot-v2-20261002", "bot-last30days-20261002",
     ]);
+    expect(parsed.every(({ installCount }) => installCount === 0)).toBe(true);
 
     const fetch: FetchClient = async () => response(body);
     const adapter = new GrokMarketplaceAdapter({ fetch, now: () => retrievedAt });
@@ -48,7 +49,7 @@ describe("captured Marketplace index", () => {
     const source = result.templates[0]?.provenance.source as SourceIdentity;
     expect(adapter.getSourceMetadata(source)).toEqual({
       source,
-      url: "https://grok.com/marketplace/template-001",
+      url: "https://x.ai/bot/marketplace/bots/projects-manager",
       retrievedAt,
       installCount: 0,
     });
@@ -98,17 +99,47 @@ describe("detail normalization", () => {
     expect(manifest.source.externalId).toBe("project-steward");
     expect(adapter.getSourceMetadata(manifest.source)?.installCount).toBe(0);
   });
+
+  it("rejects a detail payload whose id does not match the requested source", async () => {
+    const body = await fixture("template-full-featured.html");
+    const adapter = new GrokMarketplaceAdapter({ fetch: async () => response(body), now: () => retrievedAt });
+    await expect(adapter.getTemplate({ provider: adapter.source, externalId: "wrong-id" })).rejects.toMatchObject({
+      diagnostic: {
+        code: "source_schema_drift",
+        path: "$rsc.0.0.marketplaceBot.id",
+        expected: "requested source identifier wrong-id",
+        source: { provider: "grok-marketplace", externalId: "wrong-id" },
+        retrievedAt,
+      },
+    });
+  });
+
+  it("uses the documented host and mapped public slug for detail requests", async () => {
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const detail = await fixture("template-full-featured.html");
+    const urls: string[] = [];
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async (url) => { urls.push(url); return response(urls.length === 1 ? index : detail); },
+      now: () => retrievedAt,
+    });
+    const listed = await adapter.listTemplates({ limit: 1 });
+    await adapter.fetchTemplate(listed.templates[0]!.provenance.source);
+    expect(urls).toEqual([
+      "https://x.ai/bot/marketplace/",
+      "https://x.ai/bot/marketplace/bots/projects-manager",
+    ]);
+  });
 });
 
 describe("schema drift diagnostics", () => {
   it("rejects duplicate source IDs without returning a partial index", async () => {
     const valid = await fixture("marketplace-index-2026-10-02.html");
-    const duplicate = valid.replace('"id": "template-002"', '"id": "template-001"');
+    const duplicate = valid.replace('"id": "bot-tinkabot-20261002"', '"id": "bot-projects-manager-20261002"');
     const adapter = new GrokMarketplaceAdapter({ fetch: async () => response(duplicate), now: () => retrievedAt });
     await expect(adapter.listTemplates()).rejects.toMatchObject({
-      diagnostic: { code: "source_schema_drift", path: "marketplace.templates.1.id", expected: "unique source identifier", retrievedAt },
+      diagnostic: { code: "source_schema_drift", path: "$rsc.0.0.marketplaceBots.1.id", expected: "unique source identifier", retrievedAt },
     });
-    expect(adapter.getSourceMetadata({ provider: adapter.source, externalId: "template-001" })).toBeUndefined();
+    expect(adapter.getSourceMetadata({ provider: adapter.source, externalId: "bot-projects-manager-20261002" })).toBeUndefined();
   });
 
   it("identifies a malformed record field and preserves retrieval metadata", async () => {
@@ -121,11 +152,11 @@ describe("schema drift diagnostics", () => {
       expect(error).toMatchObject({
         diagnostic: {
           code: "source_schema_drift",
-          path: "marketplace.templates.0.installCount",
+          path: "$rsc.0.0.marketplaceBots.0.installCount",
           expected: "non-negative integer",
           actual: "string",
           source: { provider: "grok-marketplace", externalId: "index" },
-          url: "https://grok.com/marketplace/",
+          url: "https://x.ai/bot/marketplace/",
           retrievedAt,
         },
       });
@@ -139,7 +170,7 @@ describe("schema drift diagnostics", () => {
       parseDetail(changed);
     } catch (error) {
       expect(error).toMatchObject({
-        diagnostic: { code: "source_schema_drift", path: "marketplace", expected: "object", source: changed.source, url: changed.url, retrievedAt },
+        diagnostic: { code: "source_schema_drift", path: "$", expected: expect.stringContaining("RSC property"), source: changed.source, url: changed.url, retrievedAt },
       });
     }
   });
@@ -177,6 +208,23 @@ describe("responsible request controls", () => {
     expect(calls).toBe(1);
   });
 
+  it("times out hung requests, aborts them, and frees the limiter slot", async () => {
+    const signals: AbortSignal[] = [];
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async (_url, init) => {
+        signals.push(init.signal);
+        return new Promise<FetchResponse>(() => undefined);
+      },
+      concurrency: 1,
+      maxRetries: 0,
+      requestTimeoutMs: 5,
+    });
+    await expect(adapter.listTemplates()).rejects.toMatchObject({ attempts: 1 });
+    await expect(adapter.listTemplates()).rejects.toMatchObject({ attempts: 1 });
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("bounds concurrent source requests", async () => {
     const body = await fixture("template-full-featured.html");
     let active = 0;
@@ -198,5 +246,42 @@ describe("responsible request controls", () => {
     releases.splice(0).forEach((release) => release());
     await expect(Promise.all(requests)).resolves.toHaveLength(3);
     expect(maximum).toBe(2);
+  });
+});
+
+describe("operator live smoke", () => {
+  it("records the live count and index/detail provenance through the same adapter", async () => {
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const detail = (await fixture("template-full-featured.html"))
+      .replaceAll("project-steward-public", "projects-manager")
+      .replaceAll("project-steward", "bot-projects-manager-20261002");
+    let calls = 0;
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async () => response(calls++ === 0 ? index : detail),
+      now: () => retrievedAt,
+    });
+    await expect(runLiveSmoke(adapter)).resolves.toEqual({
+      status: "passed",
+      index: {
+        count: 89,
+        featuredCount: 4,
+        url: "https://x.ai/bot/marketplace/",
+        retrievedAt,
+      },
+      detail: {
+        source: { provider: "grok-marketplace", externalId: "bot-projects-manager-20261002" },
+        url: "https://x.ai/bot/marketplace/bots/projects-manager",
+        retrievedAt,
+      },
+    });
+  });
+
+  it("reports a source block as inconclusive", async () => {
+    const adapter = new GrokMarketplaceAdapter({ fetch: async () => response("blocked", 403), maxRetries: 0 });
+    await expect(runLiveSmoke(adapter)).resolves.toMatchObject({
+      status: "inconclusive",
+      reason: "source_request_failed",
+      source: { url: "https://x.ai/bot/marketplace/", status: 403, attempts: 1 },
+    });
   });
 });

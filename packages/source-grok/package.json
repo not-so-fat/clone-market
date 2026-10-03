@@ -17,6 +17,7 @@
   "cloneMarket": { "layer": "source" },
   "scripts": {
     "build": "tsc -b",
+    "smoke:live": "npm run build && node dist/live-smoke.js",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run"
   },
