@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false
+  },
+  "include": [
+    "packages/**/*.ts",
+    "fixtures/**/*.ts",
+    "scripts/**/*.ts"
+  ]
+}

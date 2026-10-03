@@ -1,0 +1,27 @@
+{
+  "name": "clone-market",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*",
+    "fixtures/*"
+  ],
+  "cloneMarket": {
+    "coreDependencies": ["zod"]
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "npm run build && vitest run",
+    "lint": "node scripts/check-boundaries.mjs && tsc -p tsconfig.lint.json --pretty false"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.11",
+    "typescript": "5.9.2",
+    "vitest": "1.6.1"
+  }
+}

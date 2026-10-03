@@ -1,0 +1,10 @@
+{
+  "name": "@clone-market/consumer-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "cloneMarket": { "layer": "consumer" },
+  "dependencies": {
+    "@clone-market/core": "0.1.0"
+  }
+}

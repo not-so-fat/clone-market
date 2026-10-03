@@ -1,0 +1,30 @@
+{
+  "name": "@clone-market/core",
+  "version": "0.1.0",
+  "description": "Transport-neutral contracts and ports for Clone Market",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas": {
+      "types": "./dist/json-schemas.d.ts",
+      "import": "./dist/json-schemas.js"
+    }
+  },
+  "engines": { "node": ">=20" },
+  "cloneMarket": { "layer": "core" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  }
+}
