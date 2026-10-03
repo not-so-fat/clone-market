@@ -1,0 +1,27 @@
+{
+  "name": "@clone-market/source-grok",
+  "version": "0.1.0",
+  "description": "Grok Marketplace source adapter for Clone Market",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": { "node": ">=20" },
+  "cloneMarket": { "layer": "source" },
+  "scripts": {
+    "build": "tsc -b",
+    "smoke:live": "npm run build && node dist/live-smoke.js",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clone-market/core": "0.1.0"
+  }
+}

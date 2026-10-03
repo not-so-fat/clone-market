@@ -1,0 +1,120 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`detail normalization > marks absent public fields unavailable instead of inventing values 1`] = `
+{
+  "id": "grok-marketplace:minimal-helper:manifest",
+  "integrations": [],
+  "memories": [],
+  "provenanceUrl": "https://x.ai/bot/marketplace/bots/minimal-helper",
+  "retrievedAt": "2026-10-02T18:30:00.000Z",
+  "routines": [],
+  "schemaVersion": "1.0.0",
+  "skills": [],
+  "source": {
+    "externalId": "minimal-helper",
+    "provider": "grok-marketplace",
+  },
+  "template": {
+    "categories": [],
+    "creator": {
+      "name": "Community Builder",
+    },
+    "featured": false,
+    "firstSeenAt": "2026-10-02T18:30:00.000Z",
+    "id": "grok-marketplace:minimal-helper",
+    "lastSeenAt": "2026-10-02T18:30:00.000Z",
+    "name": "Minimal Helper",
+    "provenance": {
+      "retrievedAt": "2026-10-02T18:30:00.000Z",
+      "schemaVersion": "1.0.0",
+      "source": {
+        "externalId": "minimal-helper",
+        "provider": "grok-marketplace",
+      },
+      "url": "https://x.ai/bot/marketplace/bots/minimal-helper",
+    },
+    "schemaVersion": "1.0.0",
+    "summary": "",
+  },
+  "unavailableFields": [
+    "template.summary",
+    "template.categories",
+    "template.creator.id",
+    "instructions",
+    "memories",
+    "skills",
+    "routines",
+    "integrations",
+  ],
+}
+`;
+
+exports[`detail normalization > normalizes every public component and validates the versioned manifest 1`] = `
+{
+  "id": "grok-marketplace:project-steward:manifest",
+  "instructions": "Coordinate work with concise, evidence-based updates.",
+  "integrations": [
+    {
+      "id": "integration-calendar",
+      "name": "Calendar",
+      "required": false,
+    },
+  ],
+  "memories": [
+    {
+      "content": "Prefer short status updates.",
+      "id": "memory-preferences",
+      "name": "Working preferences",
+    },
+  ],
+  "provenanceUrl": "https://x.ai/bot/marketplace/bots/project-steward",
+  "retrievedAt": "2026-10-02T18:30:00.000Z",
+  "routines": [
+    {
+      "id": "routine-standup",
+      "instructions": "Summarize progress, risks, and next actions.",
+      "name": "Daily standup",
+    },
+  ],
+  "schemaVersion": "1.0.0",
+  "skills": [
+    {
+      "description": "Breaks outcomes into tracked work.",
+      "id": "skill-planning",
+      "instructions": "Identify owners and dependencies.",
+      "name": "Planning",
+    },
+  ],
+  "source": {
+    "externalId": "project-steward",
+    "provider": "grok-marketplace",
+  },
+  "template": {
+    "categories": [
+      "Productivity",
+      "Featured",
+    ],
+    "creator": {
+      "id": "creator-01",
+      "name": "Avery",
+    },
+    "featured": true,
+    "firstSeenAt": "2026-10-02T18:30:00.000Z",
+    "id": "grok-marketplace:project-steward",
+    "lastSeenAt": "2026-10-02T18:30:00.000Z",
+    "name": "Project Steward",
+    "provenance": {
+      "retrievedAt": "2026-10-02T18:30:00.000Z",
+      "schemaVersion": "1.0.0",
+      "source": {
+        "externalId": "project-steward",
+        "provider": "grok-marketplace",
+      },
+      "url": "https://x.ai/bot/marketplace/bots/project-steward",
+    },
+    "schemaVersion": "1.0.0",
+    "summary": "Keeps complex projects moving.",
+  },
+  "unavailableFields": [],
+}
+`;
