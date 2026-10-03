@@ -12,7 +12,7 @@ Identity is `(source, source_template_id)`. Each complete reconciliation atomica
 
 Pass a database path to `SqliteCatalogRepository` or `runCatalogReconciliation`. Applications should use a local application-data path (for example, `$XDG_DATA_HOME/clone-market/catalog.sqlite`); the package does not assume or write a global location. Parent directories are created automatically. Tests may use `:memory:`.
 
-Migrations are ordered, transactional, and applied automatically using SQLite `user_version`. Checked-in SQL lives in `migrations/`. Production migration policy is forward-only: make a filesystem-level backup of the SQLite database before deploying a new package version. Down SQL is documented and provided for disposable local/test databases, but application code never auto-downgrades a database because doing so can destroy catalog history.
+Migrations are ordered, transactional, and applied automatically using SQLite `user_version`. Checked-in SQL lives in `migrations/`. Production migration policy is forward-only: make a filesystem-level backup of the SQLite database before deploying a new package version. Down SQL is documented and provided for disposable local/test databases, but application code never auto-downgrades a database because doing so can destroy catalog history. A database whose `user_version` is newer than the package supports is rejected instead of being opened with an older schema implementation.
 
 ## Harness
 

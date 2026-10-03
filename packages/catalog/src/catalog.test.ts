@@ -161,6 +161,38 @@ describe("deterministic reconciliation", () => {
     expect((await service.listTemplates({ present: false })).templates).toEqual([]);
     repository.close();
   });
+
+  it("supports source-neutral identity lookup, creator filters, and stable pagination", async () => {
+    const repository = new SqliteCatalogRepository(":memory:");
+    const service = new CatalogService(repository);
+    const adapter = new FixtureAdapter([
+      template("c", fixtureTime, { name: "Charlie", creator: { name: "Another Creator" } }),
+      template("a", fixtureTime, { name: "Alpha" }),
+      template("b", fixtureTime, { name: "Bravo" }),
+    ]);
+    await service.reconcile(adapter);
+
+    await expect(service.getTemplate({ provider: "fixture", externalId: "b" })).resolves.toMatchObject({
+      id: "fixture:b",
+      name: "Bravo",
+    });
+    await expect(service.getTemplate({ provider: "other", externalId: "b" })).resolves.toBeUndefined();
+    await expect(service.listTemplates({ creator: "creator-1" })).resolves.toMatchObject({
+      templates: [{ name: "Alpha" }, { name: "Bravo" }],
+    });
+    await expect(service.listTemplates({ creator: "Another Creator" })).resolves.toMatchObject({
+      templates: [{ name: "Charlie" }],
+    });
+
+    const first = await service.listTemplates({ limit: 2 });
+    expect(first.templates.map(({ name }) => name)).toEqual(["Alpha", "Bravo"]);
+    expect(first.nextCursor).toBe("2");
+    if (first.nextCursor === undefined) throw new Error("Expected another catalog page");
+    await expect(service.listTemplates({ cursor: first.nextCursor, limit: 2 })).resolves.toMatchObject({
+      templates: [{ name: "Charlie" }],
+    });
+    repository.close();
+  });
 });
 
 describe("storage boundary and migrations", () => {
@@ -185,6 +217,23 @@ describe("storage boundary and migrations", () => {
     repository.close();
   });
 
+  it("rejects forbidden fields nested in source metadata", async () => {
+    const repository = new SqliteCatalogRepository(":memory:");
+    for (const field of ["instructions", "memories", "skills", "routines", "integrations", "credentials", "manifest"]) {
+      const unsafe = {
+        template: template(`unsafe-${field}`, fixtureTime),
+        sourceMetadata: { [field]: "must not be persisted" },
+      };
+      await expect(repository.reconcile({
+        source: "fixture",
+        retrievedAt: fixtureTime,
+        records: [unsafe as unknown as CatalogRecord],
+      })).rejects.toThrow();
+    }
+    expect((await repository.listTemplates({ limit: 10 })).templates).toEqual([]);
+    repository.close();
+  });
+
   it("migrates a clean database and exposes no forbidden manifest columns", async () => {
     const path = await databasePath();
     const repository = new SqliteCatalogRepository(path);
@@ -199,6 +248,16 @@ describe("storage boundary and migrations", () => {
       "instructions", "memories", "skills", "routines", "integrations", "credentials", "manifest",
     ]));
     database.close();
+  });
+
+  it("refuses to open a database created by a newer catalog version", async () => {
+    const path = await databasePath();
+    const database = new DatabaseSync(path);
+    database.exec("PRAGMA user_version = 2");
+    database.close();
+    expect(() => new SqliteCatalogRepository(path)).toThrow(
+      "Catalog database version 2 is newer than supported version 1",
+    );
   });
 
   it("keeps production catalog code independent from Grok implementation paths", () => {

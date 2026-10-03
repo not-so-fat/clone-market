@@ -109,12 +109,21 @@ export class SqliteCatalogRepository implements CatalogRepository {
   constructor(location: string) {
     if (location !== ":memory:") mkdirSync(dirname(location), { recursive: true });
     this.#database = new DatabaseSync(location);
-    this.#database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
-    this.#migrate();
+    try {
+      this.#database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
+      this.#migrate();
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
   }
 
   #migrate(): void {
     const current = integer((this.#database.prepare("PRAGMA user_version").get() as Row).user_version);
+    const latest = migrations.at(-1)?.version ?? 0;
+    if (current > latest) {
+      throw new Error(`Catalog database version ${current} is newer than supported version ${latest}`);
+    }
     for (const migration of migrations) {
       if (migration.version <= current) continue;
       this.#database.exec("BEGIN IMMEDIATE");
