@@ -44,6 +44,7 @@ describe("deterministic adoption classification", () => {
   it.each([
     ["one promotion", [evidence("promo-1", "creator_promo", "creator")]],
     ["many promotions", [1, 2, 3, 4].map((number) => evidence(`promo-${number}`, "creator_promo", "creator"))],
+    ["independent promotions", [1, 2, 3, 4].map((number) => evidence(`independent-promo-${number}`, "creator_promo", "independent"))],
     ["promotion engagement", [evidence("promo-engaged", "creator_promo", "creator", { engagement: { likes: 50_000, reposts: 10_000 } })]],
   ])("creator-only evidence remains Listed: %s", (_name, rows) => {
     expect(deriveAdoptionSnapshot("template-1", rows, { calculatedAt }).snapshot).toMatchObject({
@@ -111,5 +112,32 @@ describe("deterministic adoption classification", () => {
     ], { calculatedAt });
     expect(result.snapshot).toMatchObject({ label: "listed", uniqueMentions: 1, independentUsageReports: 1 });
     expect(result.contributions.find(({ rule }) => rule === "reviewed_evidence")?.evidenceIds).toEqual(["quote"]);
+  });
+
+  it("prefers independent evidence when a cluster mixes creator relationships", () => {
+    const result = deriveAdoptionSnapshot("template-1", [
+      evidence("creator-outcome", "concrete_outcome", "creator", { clusterKey: "mixed-chain" }),
+      evidence("independent-share", "shared_without_use", "independent", { clusterKey: "mixed-chain" }),
+      evidence("independent-share-2", "shared_without_use", "independent"),
+    ], { calculatedAt });
+    expect(result.snapshot).toMatchObject({ label: "discussed", uniqueMentions: 2, independentUsageReports: 0 });
+    expect(result.contributions.find(({ rule }) => rule === "reviewed_evidence")?.evidenceIds)
+      .toEqual(["independent-share", "independent-share-2"]);
+  });
+
+  it("orders offset timestamps by their instants and emits the latest evidence-through value", () => {
+    const result = deriveAdoptionSnapshot("template-1", [
+      evidence("later-instant", "shared_without_use", "independent", {
+        publishedAt: "2026-09-15T10:00:00-07:00",
+        collectedAt: "2026-10-01T10:00:00-07:00",
+      }),
+      evidence("earlier-instant", "shared_without_use", "independent", {
+        publishedAt: "2026-09-15T16:30:00Z",
+        collectedAt: "2026-10-01T16:30:00Z",
+      }),
+    ], { calculatedAt });
+    expect(result.contributions.find(({ rule }) => rule === "reviewed_evidence")?.evidenceIds)
+      .toEqual(["earlier-instant", "later-instant"]);
+    expect(result.snapshot.evidenceThrough).toBe("2026-10-01T10:00:00-07:00");
   });
 });

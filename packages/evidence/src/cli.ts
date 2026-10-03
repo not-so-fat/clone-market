@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { importEvidence, type ImportFormat } from "./importer.js";
+import { prepareEvidenceImport, type ImportFormat } from "./importer.js";
 import { SqliteEvidenceRepository } from "./sqlite-repository.js";
 
 export type CliIo = {
@@ -32,12 +33,19 @@ export async function runEvidenceImportCli(
     io.stderr("--format must be json or csv\n");
     return 2;
   }
-  const repository = new SqliteEvidenceRepository(database);
+  const dryRun = args.includes("--dry-run");
+  const prepared = prepareEvidenceImport(await readFile(file, "utf8"), { format, dryRun });
+  if (prepared.result !== undefined) {
+    io.stdout(`${JSON.stringify(prepared.result, null, 2)}\n`);
+    return 1;
+  }
+  const useExistingReadOnlyDatabase = dryRun && existsSync(database);
+  const repository = new SqliteEvidenceRepository(
+    dryRun && !useExistingReadOnlyDatabase ? ":memory:" : database,
+    useExistingReadOnlyDatabase ? { readOnly: true } : {},
+  );
   try {
-    const result = await importEvidence(repository, await readFile(file, "utf8"), {
-      format,
-      dryRun: args.includes("--dry-run"),
-    });
+    const result = await repository.importReviewed(prepared.rows, { dryRun });
     io.stdout(`${JSON.stringify(result, null, 2)}\n`);
     return result.valid ? 0 : 1;
   } finally {

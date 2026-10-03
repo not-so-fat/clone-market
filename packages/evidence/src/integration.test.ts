@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -110,6 +110,23 @@ describe("SQLite evidence repository", () => {
     repository.close();
   });
 
+  it("normalizes imported timestamps and selects the latest snapshot by instant", async () => {
+    const repository = new SqliteEvidenceRepository(":memory:");
+    await importEvidence(repository, JSON.stringify([raw("offset-row", {
+      publishedAt: "2026-10-01T05:00:00-07:00",
+      collectedAt: "2026-10-02T05:00:00-07:00",
+    })]), { format: "json" });
+    await expect(repository.listEvidence("template-1")).resolves.toMatchObject([
+      { publishedAt: "2026-10-01T12:00:00.000Z", collectedAt: "2026-10-02T12:00:00.000Z" },
+    ]);
+    const service = new EvidenceService(repository);
+    const earlier = await service.derive("template-1", { calculatedAt: "2026-10-03T16:30:00Z" });
+    const later = await service.derive("template-1", { calculatedAt: "2026-10-03T10:00:00-07:00" });
+    expect(earlier.snapshot.id).not.toBe(later.snapshot.id);
+    await expect(repository.getLatestAdoptionSnapshot("template-1")).resolves.toMatchObject({ id: later.snapshot.id });
+    repository.close();
+  });
+
   it("creates the required row, cluster, and snapshot migration columns", async () => {
     const path = await temporaryPath();
     const repository = new SqliteEvidenceRepository(path);
@@ -167,8 +184,51 @@ describe("reviewed evidence import CLI", () => {
     );
     expect(exit).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({ valid: true, dryRun: true, inserted: 1 });
+    expect(existsSync(path)).toBe(false);
     const repository = new SqliteEvidenceRepository(path);
     await expect(repository.listEvidence("template-1")).resolves.toEqual([]);
+    repository.close();
+  });
+
+  it("dry-runs against an existing database without changing it", async () => {
+    const path = await temporaryPath();
+    const file = await temporaryPath("existing-dry-run.json");
+    const repository = new SqliteEvidenceRepository(path);
+    await importEvidence(repository, JSON.stringify([raw("already-there")]), { format: "json" });
+    repository.close();
+    writeFileSync(file, JSON.stringify([raw("already-there"), raw("would-insert")]));
+    let stdout = "";
+    const exit = await runEvidenceImportCli(
+      ["--database", path, "--file", file, "--dry-run"],
+      { stdout: (value) => { stdout += value; }, stderr: () => undefined },
+    );
+    expect(exit).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ valid: true, dryRun: true, inserted: 1, updated: 1 });
+    const reopened = new SqliteEvidenceRepository(path);
+    await expect(reopened.listEvidence("template-1")).resolves.toMatchObject([{ id: "already-there" }]);
+    reopened.close();
+  });
+
+  it("does not create a database when validation fails", async () => {
+    const path = await temporaryPath();
+    const file = await temporaryPath("invalid-no-database.json");
+    writeFileSync(file, JSON.stringify([raw("invalid", { publishedAt: "not-a-date" })]));
+    const exit = await runEvidenceImportCli(
+      ["--database", path, "--file", file],
+      { stdout: () => undefined, stderr: () => undefined },
+    );
+    expect(exit).toBe(1);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("returns malformed CSV engagement as a row-level diagnostic", async () => {
+    const repository = new SqliteEvidenceRepository(":memory:");
+    const csv = [
+      "schemaVersion,id,templateId,sourceProvider,sourceExternalId,sourceUrl,sourceRetrievedAt,authorId,authorName,publishedAt,collectedAt,type,claim,engagement,creatorRelationship,confidence,reviewState",
+      `${SCHEMA_VERSION},csv-bad,template-1,blog,post-bad,https://example.test/posts/csv-bad,${collectedAt},author-1,Reviewer,2026-10-01T12:00:00.000Z,${collectedAt},trying_or_installed,Installed it,{bad-json},independent,0.9,reviewed`,
+    ].join("\n");
+    const result = await importEvidence(repository, csv, { format: "csv" });
+    expect(result).toMatchObject({ valid: false, diagnostics: [expect.objectContaining({ row: 1, path: "engagement" })] });
     repository.close();
   });
 
@@ -181,6 +241,45 @@ describe("reviewed evidence import CLI", () => {
     await expect(importEvidence(repository, csv, { format: "csv" })).resolves.toMatchObject({ valid: true, inserted: 1 });
     await expect(repository.listEvidence("template-1")).resolves.toMatchObject([
       { id: "csv-1", engagement: { likes: 2 }, reviewState: "reviewed" },
+    ]);
+    repository.close();
+  });
+
+  it("returns evidence-id conflicts as row-level diagnostics", async () => {
+    const repository = new SqliteEvidenceRepository(":memory:");
+    await importEvidence(repository, JSON.stringify([raw("same-id")]), { format: "json" });
+    const conflicting = raw("same-id", {
+      provenance: {
+        schemaVersion: SCHEMA_VERSION,
+        source: { provider: "fixture", externalId: "other" },
+        retrievedAt: collectedAt,
+        url: "https://example.test/posts/other",
+      },
+    });
+    await expect(importEvidence(repository, JSON.stringify([conflicting]), { format: "json" })).resolves.toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({ row: 1, path: "id", code: "evidence_id_conflict" })],
+    });
+    repository.close();
+  });
+
+  it("promotes a pending row to reviewed when the same evidence is re-imported", async () => {
+    const repository = new SqliteEvidenceRepository(":memory:");
+    await importEvidence(repository, JSON.stringify([raw("review-later", { reviewState: "pending" })]), { format: "json" });
+    const result = await importEvidence(repository, JSON.stringify([raw("review-later", { reviewState: "reviewed" })]), { format: "json" });
+    expect(result.rows).toEqual([expect.objectContaining({ action: "update" })]);
+    await expect(repository.listEvidence("template-1")).resolves.toMatchObject([
+      { id: "review-later", reviewState: "reviewed" },
+    ]);
+    repository.close();
+  });
+
+  it("stores evidence received through the core port as pending review", async () => {
+    const repository = new SqliteEvidenceRepository(":memory:");
+    const { reviewState: _reviewState, ...evidence } = raw("core-port");
+    await repository.saveEvidence(evidence as never);
+    await expect(repository.listEvidence("template-1")).resolves.toMatchObject([
+      { id: "core-port", reviewState: "pending" },
     ]);
     repository.close();
   });

@@ -22,7 +22,9 @@ import type {
   StoredEvidence,
 } from "./types.js";
 
-const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+  DatabaseSync: new(location: string, options?: { readOnly?: boolean }) => DatabaseSyncType;
+};
 type Row = Record<string, unknown>;
 
 function string(value: unknown): string {
@@ -77,21 +79,30 @@ function storedEvidence(row: Row): StoredEvidence {
 export type SqliteEvidenceRepositoryOptions = {
   canonicalizeUrl?: (url: string) => string;
   clusterKey?: ClusterKeyResolver;
+  /** Opens an existing migrated database without any filesystem or schema writes. */
+  readOnly?: boolean;
 };
 
 export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepository {
   readonly #database: DatabaseSyncType;
   readonly #canonicalizeUrl: (url: string) => string;
   readonly #clusterKey: ClusterKeyResolver;
+  readonly #readOnly: boolean;
 
   constructor(location: string, options: SqliteEvidenceRepositoryOptions = {}) {
-    if (location !== ":memory:") mkdirSync(dirname(location), { recursive: true });
+    this.#readOnly = options.readOnly ?? false;
+    if (location !== ":memory:" && !this.#readOnly) mkdirSync(dirname(location), { recursive: true });
     this.#canonicalizeUrl = options.canonicalizeUrl ?? canonicalizeEvidenceUrl;
     this.#clusterKey = options.clusterKey ?? ((row, canonicalUrl) => row.clusterKey ?? canonicalUrl);
-    this.#database = new DatabaseSync(location);
+    this.#database = this.#readOnly
+      ? new DatabaseSync(location, { readOnly: true })
+      : new DatabaseSync(location);
     try {
-      this.#database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
-      this.#migrate();
+      this.#database.exec("PRAGMA foreign_keys = ON;");
+      if (!this.#readOnly) {
+        this.#database.exec("PRAGMA journal_mode = WAL;");
+        this.#migrate();
+      }
     } catch (error) {
       this.#database.close();
       throw error;
@@ -124,19 +135,29 @@ export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepo
     return (this.#database.prepare(`
       SELECT rows.*, clusters.cluster_key FROM evidence_rows AS rows
       JOIN evidence_clusters AS clusters ON clusters.cluster_id = rows.cluster_id
-      WHERE rows.template_id = ? ORDER BY rows.published_at, rows.evidence_id
+      WHERE rows.template_id = ? ORDER BY julianday(rows.published_at), rows.evidence_id
     `).all(templateId) as Row[]).map(storedEvidence);
   }
 
   async saveEvidence(evidence: Evidence): Promise<void> {
-    const result = await this.importReviewed([{ ...EvidenceSchema.parse(evidence), reviewState: "reviewed" }]);
+    const result = await this.importReviewed([{ ...EvidenceSchema.parse(evidence), reviewState: "pending" }]);
     if (!result.valid) throw new TypeError(result.diagnostics.map(({ message }) => message).join("; "));
   }
 
   async importReviewed(rows: EvidenceImportRow[], options: { dryRun?: boolean } = {}): Promise<ImportResult> {
+    if (this.#readOnly && !options.dryRun) throw new TypeError("Read-only evidence repositories only support dry-run imports");
     const prepared = rows.map((input, index) => {
       const { reviewState: _reviewState, clusterKey: _clusterKey, ...contract } = input;
-      const evidence = EvidenceSchema.parse(contract);
+      const parsed = EvidenceSchema.parse(contract);
+      const evidence: Evidence = {
+        ...parsed,
+        provenance: {
+          ...parsed.provenance,
+          retrievedAt: new Date(parsed.provenance.retrievedAt).toISOString(),
+        },
+        publishedAt: new Date(parsed.publishedAt).toISOString(),
+        collectedAt: new Date(parsed.collectedAt).toISOString(),
+      };
       const canonicalUrl = this.#canonicalizeUrl(evidence.provenance.url);
       const clusterKey = this.#clusterKey(input, canonicalUrl).trim();
       if (clusterKey.length === 0 || clusterKey.length > 512) throw new TypeError(`Row ${index + 1}: clusterKey must contain 1 to 512 characters`);
@@ -145,34 +166,50 @@ export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepo
     const seenUrls = new Set<string>();
     const seenIds = new Set<string>();
     const preview: ImportPreviewRow[] = [];
+    const diagnostics: ImportResult["diagnostics"] = [];
     for (const item of prepared) {
       const urlKey = `${item.evidence.templateId}\0${item.canonicalUrl}`;
       const existingUrl = this.#database.prepare(
         "SELECT evidence_id FROM evidence_rows WHERE template_id = ? AND canonical_url = ?",
-      ).get(item.evidence.templateId, item.canonicalUrl);
-      const existingId = this.#database.prepare("SELECT canonical_url FROM evidence_rows WHERE evidence_id = ?").get(item.evidence.id) as Row | undefined;
-      if ((existingId !== undefined && string(existingId.canonical_url) !== item.canonicalUrl) || seenIds.has(item.evidence.id)) {
-        throw new TypeError(`Row ${item.row}: evidence id ${item.evidence.id} is already used for another row`);
+      ).get(item.evidence.templateId, item.canonicalUrl) as Row | undefined;
+      const existingId = this.#database.prepare(
+        "SELECT template_id, canonical_url FROM evidence_rows WHERE evidence_id = ?",
+      ).get(item.evidence.id) as Row | undefined;
+      if (seenIds.has(item.evidence.id) || (existingId !== undefined && (
+        string(existingId.template_id) !== item.evidence.templateId
+        || string(existingId.canonical_url) !== item.canonicalUrl
+      ))) {
+        diagnostics.push({
+          row: item.row,
+          path: "id",
+          code: "evidence_id_conflict",
+          message: `Evidence id ${item.evidence.id} is already used for another row`,
+        });
+        continue;
       }
       seenIds.add(item.evidence.id);
-      const duplicate = existingUrl !== undefined || seenUrls.has(urlKey);
+      const update = existingId !== undefined;
+      const duplicate = !update && (existingUrl !== undefined || seenUrls.has(urlKey));
       seenUrls.add(urlKey);
       preview.push({
         row: item.row, evidenceId: item.evidence.id, canonicalUrl: item.canonicalUrl,
-        clusterKey: item.clusterKey, action: duplicate ? "duplicate_url" : "insert",
+        clusterKey: item.clusterKey, action: update ? "update" : duplicate ? "duplicate_url" : "insert",
       });
     }
     const inserted = preview.filter(({ action }) => action === "insert").length;
+    const updated = preview.filter(({ action }) => action === "update").length;
     const result: ImportResult = {
-      valid: true, dryRun: options.dryRun ?? false, total: rows.length, inserted,
-      duplicates: rows.length - inserted, diagnostics: [], rows: preview,
+      valid: diagnostics.length === 0, dryRun: options.dryRun ?? false, total: rows.length, inserted, updated,
+      duplicates: preview.filter(({ action }) => action === "duplicate_url").length,
+      diagnostics, rows: preview,
     };
-    if (options.dryRun) return result;
+    if (options.dryRun || !result.valid) return result;
 
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       for (const [index, item] of prepared.entries()) {
-        if (preview[index]!.action === "duplicate_url") continue;
+        const action = preview[index]!.action;
+        if (action === "duplicate_url") continue;
         this.#database.prepare(`
           INSERT OR IGNORE INTO evidence_clusters (template_id, cluster_key, created_at) VALUES (?, ?, ?)
         `).run(item.evidence.templateId, item.clusterKey, item.evidence.collectedAt);
@@ -180,6 +217,22 @@ export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepo
           "SELECT cluster_id FROM evidence_clusters WHERE template_id = ? AND cluster_key = ?",
         ).get(item.evidence.templateId, item.clusterKey) as Row;
         const e = item.evidence;
+        if (action === "update") {
+          this.#database.prepare(`
+            UPDATE evidence_rows SET
+              cluster_id = ?, schema_version = ?, source_provider = ?, source_external_id = ?,
+              source_url = ?, canonical_url = ?, source_retrieved_at = ?, author_id = ?, author_name = ?,
+              published_at = ?, evidence_type = ?, claim = ?, engagement_json = ?, creator_relationship = ?,
+              confidence = ?, collected_at = ?, review_state = ?
+            WHERE evidence_id = ?
+          `).run(
+            cluster.cluster_id, e.schemaVersion, e.provenance.source.provider, e.provenance.source.externalId,
+            e.provenance.url, item.canonicalUrl, e.provenance.retrievedAt, e.author.id ?? null, e.author.name,
+            e.publishedAt, e.type, e.claim, JSON.stringify(e.engagement), e.creatorRelationship,
+            e.confidence, e.collectedAt, item.input.reviewState, e.id,
+          );
+          continue;
+        }
         this.#database.prepare(`
           INSERT INTO evidence_rows (
             evidence_id, template_id, cluster_id, schema_version, source_provider, source_external_id,
@@ -204,7 +257,7 @@ export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepo
   async getLatestAdoptionSnapshot(templateId: string): Promise<AdoptionSnapshot | undefined> {
     const row = this.#database.prepare(`
       SELECT snapshot_json FROM adoption_snapshots WHERE template_id = ?
-      ORDER BY calculated_at DESC, snapshot_id DESC LIMIT 1
+      ORDER BY julianday(calculated_at) DESC, snapshot_id DESC LIMIT 1
     `).get(templateId) as Row | undefined;
     return row === undefined ? undefined : AdoptionSnapshotSchema.parse(JSON.parse(string(row.snapshot_json)));
   }
@@ -233,7 +286,7 @@ export class SqliteEvidenceRepository implements EvidenceStore, CoreEvidenceRepo
   async getLatestDerivation(templateId: string): Promise<AdoptionDerivation | undefined> {
     const row = this.#database.prepare(`
       SELECT derivation_json FROM adoption_snapshots WHERE template_id = ?
-      ORDER BY calculated_at DESC, snapshot_id DESC LIMIT 1
+      ORDER BY julianday(calculated_at) DESC, snapshot_id DESC LIMIT 1
     `).get(templateId) as Row | undefined;
     if (row === undefined) return undefined;
     const parsed = JSON.parse(string(row.derivation_json)) as AdoptionDerivation | null;

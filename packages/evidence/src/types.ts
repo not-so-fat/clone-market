@@ -54,7 +54,7 @@ export type ImportPreviewRow = {
   evidenceId: string;
   canonicalUrl: string;
   clusterKey: string;
-  action: "insert" | "duplicate_url";
+  action: "insert" | "update" | "duplicate_url";
 };
 
 export type ImportResult = {
@@ -62,6 +62,7 @@ export type ImportResult = {
   dryRun: boolean;
   total: number;
   inserted: number;
+  updated?: number;
   duplicates: number;
   diagnostics: ImportDiagnostic[];
   rows: ImportPreviewRow[];

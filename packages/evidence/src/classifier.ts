@@ -16,6 +16,12 @@ const TYPE_PRIORITY: Record<EvidenceType, number> = {
   repeated_use: 4,
   concrete_outcome: 5,
 };
+const RELATIONSHIP_PRIORITY: Record<StoredEvidence["creatorRelationship"], number> = {
+  creator: 0,
+  affiliated: 1,
+  unknown: 2,
+  independent: 3,
+};
 const VELOCITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type ClassifierOptions = {
@@ -31,9 +37,10 @@ function timestamp(value: string, field: string): number {
 
 function representative(rows: StoredEvidence[]): StoredEvidence {
   return [...rows].sort((left, right) =>
-    TYPE_PRIORITY[right.type] - TYPE_PRIORITY[left.type]
+    RELATIONSHIP_PRIORITY[right.creatorRelationship] - RELATIONSHIP_PRIORITY[left.creatorRelationship]
+    || TYPE_PRIORITY[right.type] - TYPE_PRIORITY[left.type]
     || right.confidence - left.confidence
-    || left.publishedAt.localeCompare(right.publishedAt)
+    || timestamp(left.publishedAt, "publishedAt") - timestamp(right.publishedAt, "publishedAt")
     || left.id.localeCompare(right.id),
   )[0]!;
 }
@@ -76,9 +83,12 @@ export function deriveAdoptionSnapshot(
     clusters.set(row.clusterKey, rows);
   }
   const counted = [...clusters.values()].map(representative).sort((left, right) =>
-    left.publishedAt.localeCompare(right.publishedAt) || left.id.localeCompare(right.id),
+    timestamp(left.publishedAt, "publishedAt") - timestamp(right.publishedAt, "publishedAt")
+    || left.id.localeCompare(right.id),
   );
-  const organic = counted.filter(({ creatorRelationship }) => creatorRelationship === "independent");
+  const organic = counted.filter(({ creatorRelationship, type }) =>
+    creatorRelationship === "independent" && type !== "creator_promo",
+  );
   const usage = organic.filter(({ type }) => USAGE_TYPES.has(type));
   const quality = usage.filter(({ type }) => QUALITY_TYPES.has(type));
   const recentOrganic = organic.filter((row) => {
@@ -107,7 +117,9 @@ export function deriveAdoptionSnapshot(
         ? organic
         : counted;
   const evidenceThrough = counted.length === 0 ? options.calculatedAt : counted.reduce(
-    (latest, row) => row.collectedAt > latest ? row.collectedAt : latest,
+    (latest, row) => timestamp(row.collectedAt, "collectedAt") > timestamp(latest, "collectedAt")
+      ? row.collectedAt
+      : latest,
     counted[0]!.collectedAt,
   );
   const digest = createHash("sha256")

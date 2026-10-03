@@ -32,7 +32,14 @@ export function parseCsv(input: string): Record<string, string>[] {
 
 function csvRow(row: Record<string, string>): unknown {
   let engagement: unknown = {};
-  if (row.engagement !== undefined && row.engagement.length > 0) engagement = JSON.parse(row.engagement);
+  if (row.engagement !== undefined && row.engagement.length > 0) {
+    try {
+      engagement = JSON.parse(row.engagement);
+    } catch {
+      // Leave malformed JSON for EvidenceSchema to report against this row and field.
+      engagement = row.engagement;
+    }
+  }
   const author = row.authorId === undefined || row.authorId.length === 0
     ? { name: row.authorName }
     : { id: row.authorId, name: row.authorName };
@@ -121,21 +128,30 @@ export async function importEvidence(
   input: string,
   options: { format: ImportFormat; dryRun?: boolean },
 ): Promise<ImportResult> {
+  const prepared = prepareEvidenceImport(input, options);
+  if (prepared.result !== undefined) return prepared.result;
+  return repository.importReviewed(prepared.rows, options.dryRun === undefined ? {} : { dryRun: options.dryRun });
+}
+
+export function prepareEvidenceImport(
+  input: string,
+  options: { format: ImportFormat; dryRun?: boolean },
+): { rows: EvidenceImportRow[]; result?: ImportResult } {
   let raw: unknown[];
   try {
     raw = parseEvidenceDocument(input, options.format);
   } catch (error) {
-    return {
+    return { rows: [], result: {
       valid: false, dryRun: options.dryRun ?? false, total: 0, inserted: 0, duplicates: 0, rows: [],
       diagnostics: [{ row: 0, path: "", code: "invalid_document", message: error instanceof Error ? error.message : String(error) }],
-    };
+    } };
   }
   const validated = validateEvidenceRows(raw);
   if (validated.diagnostics.length > 0) {
-    return {
+    return { rows: [], result: {
       valid: false, dryRun: options.dryRun ?? false, total: raw.length, inserted: 0, duplicates: 0,
       diagnostics: validated.diagnostics, rows: [],
-    };
+    } };
   }
-  return repository.importReviewed(validated.rows, options.dryRun === undefined ? {} : { dryRun: options.dryRun });
+  return { rows: validated.rows };
 }
