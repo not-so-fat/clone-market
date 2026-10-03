@@ -40,6 +40,20 @@ export const TemplateSchema = z
   .strict()
   .meta({ id: "Template" });
 
+/** Public index metadata that is safe to retain centrally. Unknown keys are rejected. */
+export const CatalogSourceMetadataSchema = z
+  .object({ installCount: z.number().int().nonnegative().optional() })
+  .strict()
+  .meta({ id: "CatalogSourceMetadata" });
+
+export const CatalogRecordSchema = z
+  .object({
+    template: TemplateSchema,
+    sourceMetadata: CatalogSourceMetadataSchema,
+  })
+  .strict()
+  .meta({ id: "CatalogRecord" });
+
 export const ManifestMemorySchema = z
   .object({ id: identifier, name: z.string().min(1), content: z.string() })
   .strict();
@@ -212,6 +226,44 @@ export const VerifyResultSchema = z
 export type SourceIdentity = z.infer<typeof SourceIdentitySchema>;
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 export type Template = z.infer<typeof TemplateSchema>;
+export type CatalogSourceMetadata = z.infer<typeof CatalogSourceMetadataSchema>;
+export type CatalogRecord = z.infer<typeof CatalogRecordSchema>;
+export type CatalogEntry = Template & {
+  present: boolean;
+  lastRetrievedAt: string;
+  sourceMetadata: CatalogSourceMetadata;
+};
+export type CatalogChangeType = "added" | "changed" | "removed" | "reappeared";
+export type CatalogHistoryEntry = {
+  change: CatalogChangeType;
+  capturedAt: string;
+  contentHash: string;
+  entry: CatalogEntry;
+};
+export type CatalogQuery = {
+  cursor?: string;
+  limit?: number;
+  source?: string;
+  category?: string;
+  creator?: string;
+  featured?: boolean;
+  present?: boolean;
+};
+export type CatalogReconciliationInput = {
+  source: string;
+  retrievedAt: string;
+  records: CatalogRecord[];
+};
+export type CatalogReconciliationReport = {
+  source: string;
+  retrievedAt: string;
+  total: number;
+  added: number;
+  changed: number;
+  removed: number;
+  reappeared: number;
+  unchanged: number;
+};
 export type BotTemplateManifest = z.infer<typeof BotTemplateManifestSchema>;
 export type EvidenceType = z.infer<typeof EvidenceTypeSchema>;
 export type Evidence = z.infer<typeof EvidenceSchema>;
