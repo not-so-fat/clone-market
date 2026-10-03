@@ -142,6 +142,21 @@ Template, source URL, author, publication date, evidence type, claim, engagement
 
 Dated derived counts and labels: unique mentions, independent usage reports, repeated-use reports, outcome reports, source breadth, velocity, and confidence.
 
+## Reusable API boundaries
+
+The ingestion and import primitives are reusable product infrastructure. Clone Market's catalog UI and Botmancer's import flow are consumers; neither owns the underlying contracts.
+
+1. **Core contracts** define versioned, serializable `Template`, `BotTemplateManifest`, `Evidence`, `AdoptionSnapshot`, provenance, and compatibility types. Core has no network, storage, UI, Grok, or Botmancer dependency.
+2. **Source adapters** implement a common interface for listing templates, fetching one current public template, and normalizing it into core contracts. Grok-specific parsing and schema-drift detection stay inside the Grok adapter.
+3. **Catalog and evidence services** persist allowed metadata, source snapshots, evidence rows, and derived adoption labels through repository interfaces rather than source-specific storage calls.
+4. **Compatibility planning** compares a manifest with declared target capabilities and returns a reviewable clone plan. It does not generate target files or execute imported instructions.
+5. **Target adapters** preview, apply, and verify a clone plan for Botmancer, Agent Deck, or a coding agent. Target-specific generation never leaks into the manifest or source adapter.
+6. **Product surfaces** compose these APIs. They may add transport layers such as CLI, HTTP, or UI, but reusable modules remain transport-neutral and callable independently.
+
+Dependency direction is one way: product surfaces depend on target adapters and services; target adapters and services depend on core contracts; source adapters depend on core contracts. Source adapters and target adapters never depend on each other.
+
+Every public contract carries a schema version and source provenance. Side-effecting operations are explicit, reviewable, and idempotent where retries are possible.
+
 ## V0
 
 V0 proves the end-to-end contract, not merely scraping:
