@@ -1,0 +1,5 @@
+{
+  "name": "@fixture/core",
+  "cloneMarket": { "layer": "core" },
+  "dependencies": { "@fixture/product": "workspace:*" }
+}
