@@ -1,0 +1,29 @@
+{
+  "name": "@clone-market/catalog",
+  "version": "0.1.0",
+  "description": "Source-neutral catalog reconciliation and SQLite persistence",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "migrations", "README.md"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": { "node": ">=22.5" },
+  "cloneMarket": { "layer": "product" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "npm run build && vitest run --root ../.. packages/catalog"
+  },
+  "dependencies": {
+    "@clone-market/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@clone-market/source-grok": "0.1.0"
+  }
+}

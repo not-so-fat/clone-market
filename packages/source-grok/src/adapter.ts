@@ -134,6 +134,11 @@ export class GrokMarketplaceAdapter implements SourceAdapter {
     return metadata === undefined ? undefined : { ...metadata, source: { ...metadata.source } };
   }
 
+  getCatalogMetadata(source: SourceIdentity): { installCount: number } | undefined {
+    const metadata = this.getSourceMetadata(source);
+    return metadata === undefined ? undefined : { installCount: metadata.installCount };
+  }
+
   async listTemplates(input?: { cursor?: string; limit?: number }) {
     const document = await this.#request(this.#baseUrl, { provider: this.source, externalId: "index" });
     const parsed = parseIndex(document);

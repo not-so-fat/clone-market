@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/compatibility" },
+    { "path": "packages/catalog" },
     { "path": "packages/source-grok" },
     { "path": "fixtures/consumer" }
   ]

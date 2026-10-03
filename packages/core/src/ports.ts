@@ -2,6 +2,12 @@ import type {
   AdoptionSnapshot,
   ApplyResult,
   BotTemplateManifest,
+  CatalogEntry,
+  CatalogHistoryEntry,
+  CatalogQuery,
+  CatalogReconciliationInput,
+  CatalogReconciliationReport,
+  CatalogSourceMetadata,
   ClonePlan,
   Evidence,
   OperationIdentity,
@@ -19,15 +25,18 @@ export interface SourceAdapter {
   }>;
   fetchTemplate(source: SourceIdentity): Promise<unknown>;
   normalizeTemplate(input: unknown, retrievedAt: string): Promise<BotTemplateManifest>;
+  /** Optional, explicitly allowlisted metadata captured while listing the public index. */
+  getCatalogMetadata?(source: SourceIdentity): CatalogSourceMetadata | undefined | Promise<CatalogSourceMetadata | undefined>;
 }
 
 export interface CatalogRepository {
-  getTemplate(id: string): Promise<Template | undefined>;
-  saveTemplate(template: Template): Promise<void>;
-  listTemplates(input?: { cursor?: string; limit?: number }): Promise<{
-    templates: Template[];
+  reconcile(input: CatalogReconciliationInput): Promise<CatalogReconciliationReport>;
+  getTemplate(source: SourceIdentity): Promise<CatalogEntry | undefined>;
+  listTemplates(input?: CatalogQuery): Promise<{
+    templates: CatalogEntry[];
     nextCursor?: string;
   }>;
+  getSourceHistory(source: SourceIdentity): Promise<CatalogHistoryEntry[]>;
 }
 
 export interface EvidenceRepository {
