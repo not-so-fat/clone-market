@@ -1,0 +1,26 @@
+{
+  "name": "@clone-market/compatibility",
+  "version": "0.1.0",
+  "description": "Pure, deterministic compatibility planning for Clone Market manifests",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "engines": { "node": ">=20" },
+  "cloneMarket": { "layer": "compatibility" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@clone-market/core": "0.1.0"
+  }
+}
