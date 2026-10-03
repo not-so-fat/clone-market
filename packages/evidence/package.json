@@ -1,0 +1,25 @@
+{
+  "name": "@clone-market/evidence",
+  "version": "0.1.0",
+  "description": "Source-neutral public evidence storage, import, and adoption classification",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "migrations", "README.md"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": { "clone-market-evidence-import": "./dist/cli.js" },
+  "engines": { "node": ">=22.5" },
+  "cloneMarket": { "layer": "product" },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "npm run build && vitest run --root ../.. packages/evidence"
+  },
+  "dependencies": { "@clone-market/core": "0.1.0" }
+}

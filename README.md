@@ -23,9 +23,11 @@ The reusable contracts live in `@clone-market/core`. Product surfaces, source,
 storage, and future target implementations consume that package; they do not own
 its transport-neutral contracts. The source-neutral index catalog and SQLite
 adapter live in `@clone-market/catalog`. See [ADR 0001](docs/decisions/0001-package-graph.md).
+Reviewed public signals, deduplication, and inspectable adoption-label derivation
+live in `@clone-market/evidence`.
 
 ## Status
 
-Foundation contracts, the Grok Marketplace source adapter, and the central public
-index catalog are implemented. Private target import and catalog rendering remain
-future work.
+Foundation contracts, the Grok Marketplace source adapter, the central public
+index catalog, and reviewed public-evidence labels are implemented. Private target
+import and catalog rendering remain future work.
