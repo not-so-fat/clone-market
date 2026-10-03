@@ -72,6 +72,8 @@ export async function checkBoundaries(root) {
         const edge = `${pkg.name} (${pkg.layer}) -> ${target.name} (${target.layer})`;
         if (pkg.layer === "core") {
           violations.push(`${edge}: core cannot depend on another workspace package`);
+        } else if (pkg.layer === "compatibility" && target.name !== "@clone-market/core") {
+          violations.push(`${edge}: compatibility can depend only on @clone-market/core`);
         } else if (pkg.layer === "source" && target.layer === "target") {
           violations.push(`${edge}: source packages cannot depend on target packages`);
         } else if (pkg.layer === "target" && target.layer === "source") {

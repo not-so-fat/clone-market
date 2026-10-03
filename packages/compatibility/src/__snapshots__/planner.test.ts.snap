@@ -1,0 +1,404 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`capability-only target variation > produces compatible and partial entries for a generic coding-agent fixture 1`] = `
+{
+  "assessments": [
+    {
+      "classification": "compatible",
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "rationaleCode": "instruction_form_compatible",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "instruction-form:plain_text",
+      ],
+    },
+    {
+      "classification": "compatible",
+      "componentId": "preferences",
+      "componentType": "memory",
+      "rationaleCode": "memory_embedded",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "memory:embedded",
+      ],
+    },
+    {
+      "classification": "compatible",
+      "componentId": "planning",
+      "componentType": "skill",
+      "rationaleCode": "skill_embedded",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "skill:embedded",
+      ],
+    },
+    {
+      "classification": "partial",
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "routine_manual",
+      "requiredActionIds": [
+        "action-001",
+      ],
+      "requiredCapabilities": [
+        "routine:manual",
+      ],
+    },
+    {
+      "classification": "compatible",
+      "componentId": "issues",
+      "componentType": "integration",
+      "rationaleCode": "integration_compatible",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "integration:issues",
+      ],
+    },
+  ],
+  "manifestId": "manifest-1",
+  "omittedComponents": [],
+  "readiness": "action_required",
+  "requiredUserActions": [
+    {
+      "code": "review_manual_conversion",
+      "componentId": "standup",
+      "componentType": "routine",
+      "id": "action-001",
+      "status": "unresolved",
+    },
+  ],
+  "schemaVersion": "1.0.0",
+  "summary": {
+    "compatible": 4,
+    "exact": 0,
+    "partial": 1,
+    "unavailable": 0,
+    "unsafe": 0,
+  },
+  "target": {
+    "provider": "generic-fixture",
+    "runtime": "coding-agent",
+  },
+  "warnings": [
+    {
+      "code": "component_degraded",
+      "componentId": "standup",
+      "componentType": "routine",
+    },
+  ],
+}
+`;
+
+exports[`deterministic, exhaustive plans > repeats byte-equivalent canonical output and matches the stable full fixture 1`] = `
+{
+  "assessments": [
+    {
+      "classification": "exact",
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "rationaleCode": "instruction_form_exact",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "instruction-form:plain_text",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "preferences",
+      "componentType": "memory",
+      "rationaleCode": "memory_native",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "memory:native",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "planning",
+      "componentType": "skill",
+      "rationaleCode": "skill_native",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "skill:native",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "routine_native",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "routine:native",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "issues",
+      "componentType": "integration",
+      "rationaleCode": "integration_exact",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "integration:issues",
+      ],
+    },
+  ],
+  "manifestId": "manifest-1",
+  "omittedComponents": [],
+  "readiness": "apply_ready",
+  "requiredUserActions": [],
+  "schemaVersion": "1.0.0",
+  "summary": {
+    "compatible": 0,
+    "exact": 5,
+    "partial": 0,
+    "unavailable": 0,
+    "unsafe": 0,
+  },
+  "target": {
+    "provider": "fixture",
+    "runtime": "agent",
+  },
+  "warnings": [],
+}
+`;
+
+exports[`unavailable and unsafe plans > returns a stable unavailable plan with unresolved actions 1`] = `
+{
+  "assessments": [
+    {
+      "classification": "unavailable",
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "rationaleCode": "instruction_form_unsupported",
+      "requiredActionIds": [
+        "action-001",
+      ],
+      "requiredCapabilities": [
+        "instruction-form:plain_text",
+      ],
+    },
+    {
+      "classification": "unavailable",
+      "componentId": "preferences",
+      "componentType": "memory",
+      "rationaleCode": "memory_unsupported",
+      "requiredActionIds": [
+        "action-003",
+      ],
+      "requiredCapabilities": [
+        "memory:unsupported",
+      ],
+    },
+    {
+      "classification": "unavailable",
+      "componentId": "planning",
+      "componentType": "skill",
+      "rationaleCode": "skill_unsupported",
+      "requiredActionIds": [
+        "action-005",
+      ],
+      "requiredCapabilities": [
+        "skill:unsupported",
+      ],
+    },
+    {
+      "classification": "unavailable",
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "routine_unsupported",
+      "requiredActionIds": [
+        "action-004",
+      ],
+      "requiredCapabilities": [
+        "routine:unsupported",
+      ],
+    },
+    {
+      "classification": "unavailable",
+      "componentId": "issues",
+      "componentType": "integration",
+      "rationaleCode": "integration_unsupported",
+      "requiredActionIds": [
+        "action-002",
+      ],
+      "requiredCapabilities": [
+        "integration:issues",
+      ],
+    },
+  ],
+  "manifestId": "manifest-1",
+  "omittedComponents": [
+    {
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "rationaleCode": "instruction_form_unsupported",
+    },
+    {
+      "componentId": "preferences",
+      "componentType": "memory",
+      "rationaleCode": "memory_unsupported",
+    },
+    {
+      "componentId": "planning",
+      "componentType": "skill",
+      "rationaleCode": "skill_unsupported",
+    },
+    {
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "routine_unsupported",
+    },
+    {
+      "componentId": "issues",
+      "componentType": "integration",
+      "rationaleCode": "integration_unsupported",
+    },
+  ],
+  "readiness": "action_required",
+  "requiredUserActions": [
+    {
+      "code": "provide_supported_component",
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "id": "action-001",
+      "status": "unresolved",
+      "subject": "plain_text",
+    },
+    {
+      "code": "provide_supported_component",
+      "componentId": "issues",
+      "componentType": "integration",
+      "id": "action-002",
+      "status": "unresolved",
+    },
+    {
+      "code": "provide_supported_component",
+      "componentId": "preferences",
+      "componentType": "memory",
+      "id": "action-003",
+      "status": "unresolved",
+    },
+    {
+      "code": "provide_supported_component",
+      "componentId": "standup",
+      "componentType": "routine",
+      "id": "action-004",
+      "status": "unresolved",
+    },
+    {
+      "code": "provide_supported_component",
+      "componentId": "planning",
+      "componentType": "skill",
+      "id": "action-005",
+      "status": "unresolved",
+    },
+  ],
+  "schemaVersion": "1.0.0",
+  "summary": {
+    "compatible": 0,
+    "exact": 0,
+    "partial": 0,
+    "unavailable": 5,
+    "unsafe": 0,
+  },
+  "target": {
+    "provider": "fixture",
+    "runtime": "agent",
+  },
+  "warnings": [],
+}
+`;
+
+exports[`unavailable and unsafe plans > returns a stable unsafe plan with an unresolved action 1`] = `
+{
+  "assessments": [
+    {
+      "classification": "exact",
+      "componentId": "manifest.instructions",
+      "componentType": "instructions",
+      "rationaleCode": "instruction_form_exact",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "instruction-form:plain_text",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "preferences",
+      "componentType": "memory",
+      "rationaleCode": "memory_native",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "memory:native",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "planning",
+      "componentType": "skill",
+      "rationaleCode": "skill_native",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "skill:native",
+      ],
+    },
+    {
+      "classification": "unsafe",
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "execution_behavior_disallowed",
+      "requiredActionIds": [
+        "action-001",
+      ],
+      "requiredCapabilities": [
+        "execution-behavior:destructive_shell",
+        "routine:native",
+      ],
+    },
+    {
+      "classification": "exact",
+      "componentId": "issues",
+      "componentType": "integration",
+      "rationaleCode": "integration_exact",
+      "requiredActionIds": [],
+      "requiredCapabilities": [
+        "integration:issues",
+      ],
+    },
+  ],
+  "manifestId": "manifest-1",
+  "omittedComponents": [
+    {
+      "componentId": "standup",
+      "componentType": "routine",
+      "rationaleCode": "execution_behavior_disallowed",
+    },
+  ],
+  "readiness": "blocked",
+  "requiredUserActions": [
+    {
+      "code": "remove_disallowed_execution_behavior",
+      "componentId": "standup",
+      "componentType": "routine",
+      "id": "action-001",
+      "status": "unresolved",
+      "subject": "destructive_shell",
+    },
+  ],
+  "schemaVersion": "1.0.0",
+  "summary": {
+    "compatible": 0,
+    "exact": 4,
+    "partial": 0,
+    "unavailable": 0,
+    "unsafe": 1,
+  },
+  "target": {
+    "provider": "fixture",
+    "runtime": "agent",
+  },
+  "warnings": [],
+}
+`;
