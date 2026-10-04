@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,5 +59,18 @@ describe("artifact sink [agent]", () => {
     const blocked = join(directory, "not-a-dir");
     writeFileSync(blocked, "nope");
     await expect(new FileArtifactSink(blocked).put("export-1", files)).rejects.toBeInstanceOf(ArtifactSinkError);
+  });
+
+  it("does not leave a partial identity directory when a nested write fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "clone-market-artifacts-"));
+    temporaryDirectories.push(directory);
+    const out = join(directory, "out");
+    const sink = new FileArtifactSink(out);
+    await expect(sink.put("export-1", [
+      { path: "botmancers", content: "not-a-directory" },
+      { path: "botmancers/import.json", content: "{}" },
+    ])).rejects.toMatchObject({ code: "sink_unavailable" });
+    expect(existsSync(join(out, "export-1"))).toBe(false);
+    expect(readdirSync(out).filter((name) => name.startsWith(".tmp-"))).toEqual([]);
   });
 });

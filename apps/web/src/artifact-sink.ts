@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 export const BOTMANCERS_IMPORT_ARTIFACT = "botmancers/import.json";
@@ -101,34 +101,43 @@ export class FileArtifactSink implements ArtifactSink {
       throw new ArtifactSinkError("sink_unavailable", `Artifact sink ${this.#root} is not a directory`);
     }
     const identityDir = join(this.#root, identity);
-    const existing = existsSync(identityDir);
-    if (existing) {
-      const current = new Map<string, string>();
-      for (const path of await this.list(identity)) {
-        const content = await this.read(identity, path);
-        if (content !== undefined) current.set(path, content);
-      }
-      const same = files.length === current.size
-        && files.every((file) => current.get(file.path) === file.content);
-      if (same) return { identity, created: false };
-      throw new ArtifactSinkError("identity_conflict", `Artifact ${identity} already exists with different content`);
+    if (existsSync(identityDir)) {
+      return this.#putExisting(identity, files);
     }
+    const tmpDir = mkdtempSync(join(this.#root, `.tmp-${identity}-`));
     try {
       for (const file of files) {
         assertRelativePath(file.path);
-        const destination = join(identityDir, file.path);
-        const relativePath = relative(identityDir, destination);
+        const destination = join(tmpDir, file.path);
+        const relativePath = relative(tmpDir, destination);
         if (relativePath.startsWith("..") || relativePath.includes(`..${sep}`)) {
           throw new ArtifactSinkError("sink_unavailable", `Refusing unsafe artifact path ${file.path}`);
         }
         mkdirSync(dirname(destination), { recursive: true });
         writeFileSync(destination, file.content, "utf8");
       }
+      renameSync(tmpDir, identityDir);
     } catch (error) {
+      rmSync(tmpDir, { recursive: true, force: true });
       if (error instanceof ArtifactSinkError) throw error;
+      if (existsSync(identityDir)) {
+        return this.#putExisting(identity, files);
+      }
       throw new ArtifactSinkError("sink_unavailable", error instanceof Error ? error.message : "Artifact sink is unavailable");
     }
     return { identity, created: true };
+  }
+
+  async #putExisting(identity: string, files: readonly ArtifactFile[]): Promise<ArtifactPutResult> {
+    const current = new Map<string, string>();
+    for (const path of await this.list(identity)) {
+      const content = await this.read(identity, path);
+      if (content !== undefined) current.set(path, content);
+    }
+    const same = files.length === current.size
+      && files.every((file) => current.get(file.path) === file.content);
+    if (same) return { identity, created: false };
+    throw new ArtifactSinkError("identity_conflict", `Artifact ${identity} already exists with different content`);
   }
 
   async read(identity: string, path: string): Promise<string | undefined> {
