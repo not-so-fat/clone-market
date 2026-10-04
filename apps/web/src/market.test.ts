@@ -8,6 +8,7 @@ import type { AdoptionSnapshot, BotTemplateManifest, CatalogEntry, CatalogReposi
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import { EvidenceService, SqliteEvidenceRepository, type AdoptionEvidenceQuery, type StoredEvidence } from "@clone-market/evidence";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
+import { MemoryArtifactSink } from "./artifact-sink.js";
 import { MarketService, type ReviewResponse } from "./market.js";
 import { createV1Handlers } from "./http.js";
 import { renderCatalog, renderEvidence, renderReview } from "./presentation.js";
@@ -85,12 +86,13 @@ function client(state: ClientState) {
   } });
 }
 
-function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string; manifestFilterConcurrency?: number } = {}) {
+function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string; manifestFilterConcurrency?: number; artifacts?: MemoryArtifactSink } = {}) {
   const repo = options.repo ?? repository();
   const sourceAdapter = options.sourceAdapter ?? adapter();
   const state = options.state ?? { posts: 0 };
-  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), now: options.now ?? (() => NOW), manifestFilterConcurrency: options.manifestFilterConcurrency });
-  return { market, repo, sourceAdapter, state };
+  const artifacts = options.artifacts ?? new MemoryArtifactSink();
+  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), artifacts, now: options.now ?? (() => NOW), manifestFilterConcurrency: options.manifestFilterConcurrency });
+  return { market, repo, sourceAdapter, state, artifacts };
 }
 
 describe("catalog and inspector", () => {
@@ -361,5 +363,65 @@ describe("reviewed clone routes", () => {
     const failedApply = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } });
     expect(failedApply).toMatchObject({ status: 503, body: { error: { code: "target_unavailable", recoverable: true } } });
     expect(applyFailure.state.posts).toBe(0);
+  });
+
+  it("exports a Botmancers-compatible artifact, verifies it offline, and repeats with the same digest", async () => {
+    const artifacts = new MemoryArtifactSink();
+    const context = service({ artifacts });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    const body = { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true };
+    const first = await handlers.exportArtifact({ params, body });
+    const second = await handlers.exportArtifact({ params, body });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(context.state.posts).toBe(0);
+    const firstBody = first.body as { identity: string; created: boolean; digest: string; verification: { status: string } };
+    const secondBody = second.body as { identity: string; created: boolean; digest: string };
+    expect(firstBody.created).toBe(true);
+    expect(secondBody.created).toBe(false);
+    expect(firstBody.digest).toBe(secondBody.digest);
+    expect(firstBody.digest.startsWith("sha256:")).toBe(true);
+    expect(firstBody.verification.status).toBe("passed");
+    expect(artifacts.store.size).toBe(1);
+    const verified = await handlers.verifyArtifact({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, artifactIdentity: firstBody.identity } });
+    expect(verified).toMatchObject({ status: 200, body: { status: "passed", targetReference: firstBody.identity } });
+  });
+
+  it("does not export when the artifact sink is unavailable, and rejects a tampered artifact", async () => {
+    const unavailable = new MemoryArtifactSink();
+    unavailable.unavailable = true;
+    const blocked = service({ artifacts: unavailable });
+    const blockedHandlers = createV1Handlers(blocked.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await blockedHandlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    const body = { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true };
+    const missingSink = await blockedHandlers.exportArtifact({ params, body });
+    expect(missingSink).toMatchObject({ status: 503, body: { error: { code: "sink_unavailable", recoverable: true } } });
+    expect(unavailable.store.size).toBe(0);
+
+    const artifacts = new MemoryArtifactSink();
+    const context = service({ artifacts });
+    const handlers = createV1Handlers(context.market);
+    const ready = await handlers.preview({ params, body: { policy } });
+    const readyReview = ready.body as ReviewResponse;
+    const exported = await handlers.exportArtifact({
+      params,
+      body: { policy, planDigest: readyReview.plan.id, reviewedAt: readyReview.plan.createdAt, approved: true },
+    });
+    expect(exported.status).toBe(200);
+    const identity = (exported.body as { identity: string }).identity;
+    const stored = artifacts.store.get(identity)!;
+    stored.set("botmancers/import.json", `${stored.get("botmancers/import.json")} `);
+    const tampered = await handlers.verifyArtifact({
+      params,
+      body: { policy, planDigest: readyReview.plan.id, reviewedAt: readyReview.plan.createdAt, artifactIdentity: identity },
+    });
+    expect(tampered.status).toBe(200);
+    expect(tampered.body).toMatchObject({ status: "failed" });
+    expect(JSON.stringify(tampered.body)).toContain("artifact-digest");
   });
 });

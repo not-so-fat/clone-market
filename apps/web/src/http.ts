@@ -12,9 +12,9 @@ function source(request: ApiRequest): SourceIdentity {
   return { provider, externalId };
 }
 
-function reviewBody(request: ApiRequest): { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string } {
+function reviewBody(request: ApiRequest): { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string; artifactIdentity?: string } {
   if (typeof request.body !== "object" || request.body === null) throw new TypeError("JSON body is required");
-  return request.body as { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string };
+  return request.body as { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string; artifactIdentity?: string };
 }
 
 function required(value: string | undefined, name: string): string {
@@ -51,9 +51,17 @@ export function createV1Handlers(market: MarketService) {
       const body = reviewBody(request);
       return market.apply({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), approved: body.approved === true });
     }),
+    exportArtifact: (request: ApiRequest) => response(() => {
+      const body = reviewBody(request);
+      return market.exportArtifact({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), approved: body.approved === true });
+    }),
     verify: (request: ApiRequest) => response(() => {
       const body = reviewBody(request);
       return market.verify({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), targetReference: required(body.targetReference, "targetReference") });
+    }),
+    verifyArtifact: (request: ApiRequest) => response(() => {
+      const body = reviewBody(request);
+      return market.verifyArtifact({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), artifactIdentity: required(body.artifactIdentity, "artifactIdentity") });
     }),
   };
 }

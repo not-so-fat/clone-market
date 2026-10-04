@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 export type WebConfig = {
   catalogDatabase: string;
   evidenceDatabase: string;
+  artifactDirectory: string;
   grokBaseUrl: string;
   botmancersBaseUrl: string;
   botmancersUiBaseUrl: string;
@@ -44,6 +45,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env): WebCon
   return {
     catalogDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_CATALOG_DB ?? "./data/catalog.sqlite", root),
     evidenceDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_EVIDENCE_DB ?? "./data/evidence.sqlite", root),
+    artifactDirectory: resolveCloneMarketDataPath(environment.CLONE_MARKET_ARTIFACT_DIR ?? "./data/artifacts", root),
     grokBaseUrl: environment.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/",
     botmancersBaseUrl: environment.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/",
     botmancersUiBaseUrl: environment.CLONE_MARKET_BOTMANCERS_UI_BASE_URL ?? "http://127.0.0.1:3100/",

@@ -35,13 +35,13 @@ export function renderEvidence(query: AdoptionEvidenceQuery | undefined): string
 
 export function renderReview(review: ReviewResponse): string {
   const rows = review.compatibility.assessments.map((row) => `<tr class="${row.classification}"><td>${escape(row.componentType)}</td><td>${escape(row.componentId)}</td><td><span class="badge">${escape(row.classification)}</span></td><td>${escape(row.rationaleCode)}</td></tr>`).join("");
-  return `<section class="review"><header><p class="eyebrow">Private Botmancers import</p><h1>Review before applying</h1><p>${escape(review.preview.summary)}</p></header>
-    ${review.compatibility.summary.unsafe ? '<div class="alert danger">Unsafe plan — apply is blocked.</div>' : ""}
-    ${review.compatibility.summary.partial ? '<div class="alert warning">Partial compatibility requires review before apply.</div>' : ""}
+  return `<section class="review"><header><p class="eyebrow">Private Botmancers import</p><h1>Review before exporting</h1><p>${escape(review.preview.summary)}</p></header>
+    ${review.compatibility.summary.unsafe ? '<div class="alert danger">Unsafe plan — export is blocked.</div>' : ""}
+    ${review.compatibility.summary.partial ? '<div class="alert warning">Partial compatibility requires review before export.</div>' : ""}
     <h2>Component compatibility</h2><table><thead><tr><th>Type</th><th>Component</th><th>Result</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>
     <h2>Required actions</h2><ul>${review.compatibility.requiredUserActions.map((action) => `<li>${escape(action.code)}${action.subject ? `: ${escape(action.subject)}` : ""}</li>`).join("") || "<li>None</li>"}</ul>
     <h2>Target payload preview</h2><pre>${escape(review.preview.artifacts.find(({ path }) => path.endsWith("import.json"))?.content)}</pre>
-    <div class="decision"><h2>Your decision</h2><label><input type="checkbox" name="approved"> I approve this exact plan digest</label><button data-plan-digest="${escape(review.plan.id)}">Apply private clone</button></div></section>`;
+    <div class="decision"><h2>Your decision</h2><label><input type="checkbox" name="approved"> I approve this exact plan digest</label><button data-plan-digest="${escape(review.plan.id)}">Export private artifact</button></div></section>`;
 }
 
 export function renderVerification(result: { status: string; checks: readonly { name: string; passed: boolean; detail: string }[] }): string {

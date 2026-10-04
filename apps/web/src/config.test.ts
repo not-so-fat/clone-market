@@ -18,6 +18,7 @@ describe("web data path resolution [agent]", () => {
     });
     expect(config.catalogDatabase).toBe(join(root, "data/catalog.sqlite"));
     expect(config.evidenceDatabase).toBe(join(root, "data/evidence.sqlite"));
+    expect(config.artifactDirectory).toBe(join(root, "data/artifacts"));
   });
 
   it("defaults the Botmancers API to a local URL so copied env files do not target production", () => {
