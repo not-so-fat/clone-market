@@ -9,7 +9,7 @@ Copy `.env.example` and configure:
 - `CLONE_MARKET_CATALOG_DB`: indexed catalog SQLite database.
 - `CLONE_MARKET_EVIDENCE_DB`: public evidence SQLite database.
 - `CLONE_MARKET_GROK_BASE_URL`: Grok Marketplace source endpoint.
-- `CLONE_MARKET_BOTMANCERS_BASE_URL`: Botmancers API endpoint.
+- `CLONE_MARKET_BOTMANCERS_BASE_URL`: local Botmancers API endpoint (default `http://127.0.0.1:8787/`; do not copy a production URL for live smoke).
 - `CLONE_MARKET_BOTMANCERS_UI_BASE_URL`: Botmancers UI base used for the post-apply return link.
 
 The central databases contain catalog metadata and public evidence only. Full source manifests are fetched on demand for each detail, preview, apply, or verification request. They are not written to SQLite, cookies, local storage, or session storage.

@@ -57,4 +57,4 @@ and UI captures are operator evidence, not part of the default offline suite.
 - Multi-user hosting, billing, or analytics
 - Marketplace schema stability (undocumented HTML/RSC surface may drift)
 - Whether every public template remains importable when Botmancers capabilities change
-- Botmancers package-root `npm test` / `npm run typecheck` unless `BOTMANCERS_ROOT` is set (Clone Market does not vendor that repository; `not-so-fat/botmancers` currently has no GitHub Actions CI and no `npm test` script)
+- Botmancers package-root `npm run lint` / `tsc --noEmit` unless `BOTMANCERS_ROOT` is set (Clone Market does not vendor that repository). `not-so-fat/botmancers` currently has no GitHub Actions CI, no `npm test` script, no `app/bots/[id]` UI page, and installed `lint`/`tsc` on 2026-10-04 `main` exit nonzero — Clone Market records that as `failed`/`unverified`, never a false `passed`

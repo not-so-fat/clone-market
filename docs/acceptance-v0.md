@@ -13,11 +13,11 @@ Environment variables (see `apps/web/.env.example`):
 
 - `CLONE_MARKET_CATALOG_DB` / `CLONE_MARKET_EVIDENCE_DB` — SQLite paths. **Relative paths resolve against the Clone Market repository root**, not the Next.js cwd, so `npm run smoke:v0:live` and `npm run dev --workspace=@clone-market/web` share one file. Prefer absolute paths. Live smoke **writes the catalog here and leaves it in place** for `next dev`. It opens the evidence database for read/write so it can derive missing adoption snapshots; it fails if the file is missing or the chosen template has no reviewed rows. Fixture smoke uses a temporary directory and deletes it.
 - `CLONE_MARKET_GROK_BASE_URL` — Marketplace index/detail base (live only)
-- `CLONE_MARKET_BOTMANCERS_BASE_URL` — Botmancers import API (live only). Replay asserts bot count via `GET v1/imports` or `GET api/bots`.
+- `CLONE_MARKET_BOTMANCERS_BASE_URL` — **local** Botmancers import API (live only). Replay asserts bot count via `GET v1/imports` or `GET api/bots`. `apps/web/.env.example` defaults to `http://127.0.0.1:8787/` so `cp .env.example .env.local` does not target `https://api.botmancers.com/`.
 - `CLONE_MARKET_BOTMANCERS_UI_BASE_URL` — return link after apply (`bots/<id>`)
 - `CLONE_MARKET_ACCEPTANCE_TEMPLATE` — optional `provider:externalId` override (default fixture id: `grok-marketplace:bot-projects-manager-20261002`)
 - `CLONE_MARKET_ACCEPTANCE_LIVE=1` — enables live mode (required; `smoke:v0:live` sets this). `--live` is forwarded after a vite-node `--` so it is not swallowed.
-- `BOTMANCERS_ROOT` + `CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1` — optional **[agent]** run of the Botmancers checkout’s `npm run typecheck` / `npm test` when those scripts exist, otherwise `tsc --noEmit`, plus source inspection for a `bots/` return route and import operation identity (`idempotency-key` / `operation_id`)
+- `BOTMANCERS_ROOT` + `CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1` — optional **[agent]** run of the Botmancers checkout’s `npm run lint`, `npm run typecheck` / `tsc --noEmit`, and `npm test` when those scripts exist, plus source inspection for a UI `app/bots/[id]` (or `pages/bots/[id]`) page and import operation identity (`idempotency-key` / `operation_id`). API-only `app/api/bots` routes do not count as the return page. An executed lint/typecheck that exits nonzero is `failed` when `node_modules` is present, or `unverified` when dependencies are missing — never `passed`.
 
 ## Offline verification (both package roots) **[agent]**
 
@@ -31,18 +31,19 @@ npm run smoke:v0
 
 `npm test` and `npm run smoke:v0` stay network-free. They reconcile the captured complete Marketplace fixture, seed public evidence for Projects Manager, exercise preview → approve → apply → verify against an in-process Botmancers stub, replay the same operation id (including a Botmancers list-bot count), and assert failure paths (source drift, Botmancers unavailable at preview **and apply**, changed plan digest, idempotent retry). The machine-readable report is written under `.temporal/logs/`.
 
-When a Botmancers checkout is available on this machine:
+When a Botmancers checkout is available on this machine, install **that** repository’s dependencies first (Clone Market’s default `npm test` does not do this):
 
 ```bash
 export BOTMANCERS_ROOT=/absolute/path/to/botmancers
 cd "$BOTMANCERS_ROOT"
-# Run whichever of these exist in that package.json (not-so-fat/botmancers
-# currently has neither typecheck nor npm test; it has lint and test:acceptance).
-npm run typecheck
-npm test
+npm ci
+# not-so-fat/botmancers has lint, no typecheck script, and no npm test
+# (test:acceptance is live-gated — do not run it from Clone Market CI).
+npm run lint
+npx --no-install tsc --noEmit -p .
 ```
 
-Or from Clone Market:
+Or from Clone Market (records lint/tsc output on `peerRepositories.botmancers`):
 
 ```bash
 CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 BOTMANCERS_ROOT=/absolute/path/to/botmancers npm run smoke:v0
@@ -50,7 +51,14 @@ CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 BOTMANCERS_ROOT=/absolute/path/to/botmancer
 
 The peer check records command output in `peerRepositories.botmancers`. Clone Market does not vendor Botmancers. The Clone Market UI return link is `CLONE_MARKET_BOTMANCERS_UI_BASE_URL` + `bots/<encodeURIComponent(botId)>` (`apps/web/src/botmancers-url.ts`, used by `CloneReview`).
 
-Observed **2026-10-04** against a local clone of GitHub `not-so-fat/botmancers` (not vendored; not committed): `CLONE_MARKET_ACCEPTANCE_PEER_REPOS` check **passed** source inspection (`app/api/bots` list/import routes, `operation_id` / `import_operation_id`). That repository has **no** `npm test` or `typecheck` scripts and **no GitHub Actions workflows**. `tsc --noEmit` was executed for evidence and failed without the peer `node_modules` (this sandbox does not `npm install` Botmancers). `test:acceptance` is live-gated and was not run.
+Observed **2026-10-04** against GitHub `not-so-fat/botmancers` `main` after `npm ci` in a throwaway checkout (not vendored; not committed):
+
+- `npm run lint` exited **1** (eslint `react-hooks/immutability` errors in `app/page.tsx`).
+- `npx tsc --noEmit -p .` exited **2** (`app/layout.tsx`: `Cannot find name 'LayoutProps'`).
+- There is **no** UI route `app/bots/[id]/page.tsx` (only `app/api/bots` and a home SPA on `/`).
+- There is **no** `npm test` / `typecheck` script and **no GitHub Actions** workflows. `test:acceptance` is live-gated and was not run.
+
+The opt-in peer check therefore reports `status: failed` (executed lint/tsc plus missing UI return page). Default `npm run smoke:v0` leaves this check `skipped` so Clone Market CI stays network-free.
 
 ## Operator live sequence **[operator]**
 
@@ -60,6 +68,7 @@ One command sequence for the exit predicate. Use the **same** catalog/evidence p
 cp apps/web/.env.example apps/web/.env.local
 # Prefer absolute CLONE_MARKET_CATALOG_DB / CLONE_MARKET_EVIDENCE_DB.
 # Evidence DB must already contain reviewed rows for displayed labels.
+# Confirm CLONE_MARKET_BOTMANCERS_BASE_URL is the local API, not api.botmancers.com.
 
 set -a && source apps/web/.env.local && set +a
 
@@ -118,4 +127,4 @@ Live failures (missing DBs, missing reviewed evidence, source drift, Botmancers 
 
 ## Remaining unsupported / uncertain
 
-Documented honestly in the product brief Status section. V0 does not claim private Grok popularity, continuous X collection, Agent Deck / coding-agent targets, credentialed instruction execution, or multi-user hosting. Botmancers has no GitHub Actions CI on `not-so-fat/botmancers` as of 2026-10-04; peer verification is opt-in via `BOTMANCERS_ROOT`.
+Documented honestly in the product brief Status section. V0 does not claim private Grok popularity, continuous X collection, Agent Deck / coding-agent targets, credentialed instruction execution, or multi-user hosting. Botmancers has no GitHub Actions CI on `not-so-fat/botmancers` as of 2026-10-04; peer verification is opt-in via `BOTMANCERS_ROOT`. Installed-peer `lint` and `tsc --noEmit` on that `main` currently fail; Clone Market records `failed` / `unverified` rather than treating a failed typecheck as `passed`. The Botmancers UI is a home SPA (`/`), not a `bots/<id>` page.

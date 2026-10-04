@@ -45,7 +45,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env): WebCon
     catalogDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_CATALOG_DB ?? "./data/catalog.sqlite", root),
     evidenceDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_EVIDENCE_DB ?? "./data/evidence.sqlite", root),
     grokBaseUrl: environment.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/",
-    botmancersBaseUrl: environment.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "https://api.botmancers.com/",
+    botmancersBaseUrl: environment.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/",
     botmancersUiBaseUrl: environment.CLONE_MARKET_BOTMANCERS_UI_BASE_URL ?? "http://127.0.0.1:3100/",
   };
 }

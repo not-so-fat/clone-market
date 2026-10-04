@@ -182,7 +182,7 @@ Offline fixture acceptance covers items 1–7 against captured Marketplace HTML 
 - Public Grok schema may drift without notice; drift fails visibly rather than guessing.
 - Agent Deck and coding-agent targets are out of V0 scope.
 - Live Botmancers API/UI availability and auth are external to Clone Market.
-- Botmancers root offline tests are not vendored; they run only when `BOTMANCERS_ROOT` is provided. `not-so-fat/botmancers` has no GitHub Actions CI as of 2026-10-04.
+- Botmancers root offline tests are not vendored; they run only when `BOTMANCERS_ROOT` is provided. `not-so-fat/botmancers` has no GitHub Actions CI as of 2026-10-04. Installed `npm run lint` and `tsc --noEmit` on that `main` currently fail; Clone Market’s peer check must not report `passed` for those runs.
 
 ## Negative space
 

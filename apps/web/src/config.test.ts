@@ -20,6 +20,10 @@ describe("web data path resolution [agent]", () => {
     expect(config.evidenceDatabase).toBe(join(root, "data/evidence.sqlite"));
   });
 
+  it("defaults the Botmancers API to a local URL so copied env files do not target production", () => {
+    expect(readConfig({ CLONE_MARKET_ROOT: findCloneMarketRoot() }).botmancersBaseUrl).toBe("http://127.0.0.1:8787/");
+  });
+
   it("keeps operator absolute paths unchanged", () => {
     mkdirSync(join(process.cwd(), ".temporal/logs"), { recursive: true });
     writeFileSync(join(process.cwd(), ".temporal/logs/path-resolution.txt"), `${findCloneMarketRoot()}\n`);
