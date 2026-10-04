@@ -706,7 +706,10 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       report.target?.verification.status === "passed" && report.target.replaySameBot === true ? "passed" : "failed",
       ...report.failureCases.map((item) => item.status),
     ];
-    if (verifyPeer && report.peerRepositories.botmancers.status === "failed") statuses.push("failed");
+    if (verifyPeer) {
+      const peerStatus = report.peerRepositories.botmancers.status;
+      if (peerStatus === "failed" || peerStatus === "unverified") statuses.push("failed");
+    }
     report.status = rollupStatus(statuses);
     report.exitCode = report.status === "passed" ? 0 : 1;
     writeReport();

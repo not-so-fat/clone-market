@@ -10,15 +10,21 @@ export type PeerScriptResult = {
   output?: string;
 };
 
+export type PeerRepoStatus = "passed" | "failed" | "skipped" | "unverified";
+
 export type PeerRepoCheck = {
   root?: string;
-  status: "passed" | "failed" | "skipped";
+  status: PeerRepoStatus;
+  lint?: PeerScriptResult;
   typecheck?: PeerScriptResult;
   test?: PeerScriptResult;
   returnRouteConfirmed: boolean;
   idempotencyKeyConfirmed: boolean;
   detail: string;
 };
+
+const UI_BOT_PAGE = /\/app(?:\/\([^/]+\))*\/bots\/\[[^/]+\]\/page\.(tsx|ts|jsx|js)$/;
+const UI_BOT_PAGES_ROUTER = /\/pages\/bots\/\[[^/]+\]\.(tsx|ts|jsx|js)$/;
 
 function walkSource(root: string, files: string[] = [], depth = 0): string[] {
   if (depth > 6) return files;
@@ -50,6 +56,13 @@ function grepTree(root: string, pattern: RegExp): boolean {
     } catch {
       return false;
     }
+  });
+}
+
+function hasBotUiPage(root: string): boolean {
+  return walkSource(root).some((file) => {
+    const normalized = file.replaceAll("\\", "/");
+    return UI_BOT_PAGE.test(normalized) || UI_BOT_PAGES_ROUTER.test(normalized);
   });
 }
 
@@ -88,6 +101,21 @@ function runTsc(root: string): PeerScriptResult {
   return { status: result.status ?? 1, command, ...(output.length === 0 ? {} : { output }) };
 }
 
+function rollupPeerStatus(input: {
+  inspectionOk: boolean;
+  lintOk: boolean;
+  typecheckOk: boolean;
+  testOk: boolean;
+  hasPeerInstall: boolean;
+  typecheckExecuted: boolean;
+}): PeerRepoStatus {
+  if (!input.inspectionOk || !input.testOk) return "failed";
+  if (input.lintOk && input.typecheckOk) return "passed";
+  // Executed lint/tsc that did not succeed must never be "passed".
+  if (!input.hasPeerInstall && input.typecheckExecuted) return "unverified";
+  return "failed";
+}
+
 /** Inspect an optional Botmancers checkout for offline tests, UI return route, and idempotency-key handling. */
 export function verifyBotmancersPeerRepo(root: string | undefined): PeerRepoCheck {
   if (root === undefined || root.length === 0) {
@@ -108,32 +136,38 @@ export function verifyBotmancersPeerRepo(root: string | undefined): PeerRepoChec
     };
   }
   const scripts = packageScripts(root);
-  const returnRouteConfirmed = grepTree(root, /bots\/[:$]|`bots\/|['"]\/bots\/|path:\s*['"]bots\/|app\/api\/bots|\/api\/bots/);
+  const returnRouteConfirmed = hasBotUiPage(root);
   const idempotencyKeyConfirmed = grepTree(root, /idempotency-key|idempotencyKey|import_operation_id|operation_id/);
+  const lintName = pickScript(scripts, ["lint"]);
   const typecheckName = pickScript(scripts, ["typecheck"]);
   const testName = pickScript(scripts, ["test"]);
   const hasPeerInstall = existsSync(join(root, "node_modules"));
+  const lint = lintName === undefined
+    ? { status: 0, command: "skipped (no npm lint script)", output: Object.keys(scripts).join(",") }
+    : runNpmScript(root, lintName);
   const typecheck = typecheckName === undefined
     ? (existsSync(join(root, "tsconfig.json")) ? runTsc(root) : { status: 1, command: "missing typecheck script and tsconfig.json" })
     : runNpmScript(root, typecheckName);
   const test = testName === undefined
     ? { status: 0, command: "skipped (no npm test script; not running live-gated test:acceptance)", output: Object.keys(scripts).join(",") }
     : runNpmScript(root, testName);
-  const typecheckRequired = typecheckName !== undefined || hasPeerInstall;
-  const testRequired = testName !== undefined;
-  const status = (typecheckRequired ? typecheck.status === 0 : true)
-    && (testRequired ? test.status === 0 : true)
-    && returnRouteConfirmed
-    && idempotencyKeyConfirmed
-    ? "passed"
-    : "failed";
+  const typecheckExecuted = typecheckName !== undefined || existsSync(join(root, "tsconfig.json"));
+  const status = rollupPeerStatus({
+    inspectionOk: returnRouteConfirmed && idempotencyKeyConfirmed,
+    lintOk: lint.status === 0,
+    typecheckOk: typecheck.status === 0,
+    testOk: testName === undefined || test.status === 0,
+    hasPeerInstall,
+    typecheckExecuted,
+  });
   return {
     root,
     status,
+    lint,
     typecheck,
     test,
     returnRouteConfirmed,
     idempotencyKeyConfirmed,
-    detail: `typecheck=${typecheck.command}:${typecheck.status} test=${test.command}:${test.status} returnRoute=${returnRouteConfirmed} idempotency=${idempotencyKeyConfirmed}`,
+    detail: `lint=${lint.command}:${lint.status} typecheck=${typecheck.command}:${typecheck.status} test=${test.command}:${test.status} returnRoute=${returnRouteConfirmed} idempotency=${idempotencyKeyConfirmed} node_modules=${hasPeerInstall}`,
   };
 }
