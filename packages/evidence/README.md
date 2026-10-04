@@ -40,6 +40,16 @@ clone-market-evidence-import \
   --dry-run
 ```
 
+Import stores reviewed rows only. Derive an inspectable adoption snapshot (required before live labels appear):
+
+```sh
+clone-market-evidence-derive \
+  --database ./evidence.sqlite \
+  --template-id grok-marketplace:bot-projects-manager-20261002
+```
+
+From the Clone Market repo root: `npm run evidence:derive -- --database PATH --template-id ID`. Live `smoke:v0:live` also derives missing snapshots on the operator evidence DB.
+
 CSV uses these columns:
 
 ```text
