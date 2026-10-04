@@ -1,6 +1,7 @@
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
-import { BotmancersHttpClient } from "@clone-market/target-botmancers";
+import { FileArtifactSink } from "./artifact-sink.js";
+import { createWebBotmancersClient } from "./botmancers-client.js";
 import { readConfig } from "./config.js";
 import { MarketService } from "./market.js";
 
@@ -21,7 +22,8 @@ async function createMarketService(): Promise<MarketService> {
       if (provider !== grok.source) throw new RangeError(`Unsupported source ${provider}`);
       return grok;
     },
-    botmancers: new BotmancersHttpClient({ baseUrl: config.botmancersBaseUrl }),
+    botmancers: createWebBotmancersClient(config),
+    artifacts: new FileArtifactSink(config.artifactDirectory),
   });
 }
 

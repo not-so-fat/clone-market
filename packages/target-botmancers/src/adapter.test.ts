@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { checkBoundaries } from "../../../scripts/check-boundaries.mjs";
 import { BotmancersTargetAdapter, createBotmancersClonePlan, withReviewedPlanDigest } from "./adapter.js";
-import { BotmancersHttpClient } from "./client.js";
+import { BotmancersHttpClient, DeclaredBotmancersCapabilitiesClient } from "./client.js";
 import { CapabilityVersionError } from "./errors.js";
 import type { BotmancersFetch, BotmancersImportPayload } from "./types.js";
 
@@ -323,6 +323,21 @@ describe("BotmancersHttpClient", () => {
     expect(() => new BotmancersHttpClient({ baseUrl: "https://user:secret@botmancers.example/" })).toThrow(
       "baseUrl must not contain credentials",
     );
+  });
+});
+
+describe("DeclaredBotmancersCapabilitiesClient", () => {
+  it("returns declared capabilities without HTTP", async () => {
+    const client = new DeclaredBotmancersCapabilitiesClient();
+    await expect(client.getCapabilities()).resolves.toMatchObject({
+      schemaVersion: "1.0.0",
+      target: { provider: "botmancers" },
+      memories: "native",
+    });
+    await expect(client.importBot(
+      { schemaVersion: "1.0.0", bot: { name: "x", description: "y" }, provenance: { source: { provider: "p", externalId: "e" }, manifestId: "m", retrievedAt: "t", url: "u", reviewedPlanDigest: "d" } },
+      { operationId: "op", idempotencyKey: "key" },
+    )).rejects.toMatchObject({ name: "BotmancersHttpError" });
   });
 });
 

@@ -19,14 +19,14 @@ import {
   type VerifyResult,
 } from "@clone-market/core";
 
-import { BotmancersHttpClient } from "./client.js";
+import type { BotmancersClient } from "./client.js";
 import { CapabilityVersionError, OperationIdentityError, PlanApprovalError } from "./errors.js";
 import { BOTMANCERS_IMPORT_SCHEMA_VERSION, type BotmancersCapabilities, type BotmancersImportPayload } from "./types.js";
 
 const DIGEST_PREFIX = "sha256:";
 
 export interface BotmancersTargetAdapterOptions {
-  readonly client: BotmancersHttpClient;
+  readonly client: BotmancersClient;
   readonly manifest: BotTemplateManifest;
   readonly compatibilityPlan: CompatibilityPlan;
   readonly now?: () => string;
@@ -208,7 +208,7 @@ function differences(expected: unknown, actual: unknown, path = "$"): Array<{ pa
 
 export class BotmancersTargetAdapter implements TargetAdapter {
   readonly target = "botmancers";
-  readonly #client: BotmancersHttpClient;
+  readonly #client: BotmancersClient;
   readonly #manifest: BotTemplateManifest;
   readonly #compatibilityPlan: CompatibilityPlan;
   readonly #now: () => string;

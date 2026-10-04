@@ -1,12 +1,48 @@
 import { BotmancersHttpError, BotmancersResponseError } from "./errors.js";
 import type { OperationIdentity } from "@clone-market/core";
-import type {
-  BotmancersCapabilities,
-  BotmancersFetch,
-  BotmancersHttpResponse,
-  BotmancersImportPayload,
-  BotmancersImportRecord,
+import {
+  DECLARED_BOTMANCERS_CAPABILITIES,
+  type BotmancersCapabilities,
+  type BotmancersFetch,
+  type BotmancersHttpResponse,
+  type BotmancersImportPayload,
+  type BotmancersImportRecord,
 } from "./types.js";
+
+export interface BotmancersClient {
+  getCapabilities(): Promise<BotmancersCapabilities>;
+  importBot(payload: BotmancersImportPayload, operation: OperationIdentity): Promise<{ id: string }>;
+  getImport(id: string): Promise<BotmancersImportRecord>;
+}
+
+/** Static capabilities for preview/export/verify-artifact when no Botmancers HTTP API is configured. */
+export class DeclaredBotmancersCapabilitiesClient implements BotmancersClient {
+  capabilities: BotmancersCapabilities;
+
+  constructor(capabilities: BotmancersCapabilities = DECLARED_BOTMANCERS_CAPABILITIES) {
+    this.capabilities = structuredClone(capabilities);
+  }
+
+  async getCapabilities(): Promise<BotmancersCapabilities> {
+    return structuredClone(this.capabilities);
+  }
+
+  async importBot(_payload: BotmancersImportPayload, _operation: OperationIdentity): Promise<{ id: string }> {
+    throw new BotmancersHttpError({
+      attempts: 1,
+      retryable: true,
+      cause: new Error("Botmancers API is not configured"),
+    });
+  }
+
+  async getImport(_id: string): Promise<BotmancersImportRecord> {
+    throw new BotmancersHttpError({
+      attempts: 1,
+      retryable: true,
+      cause: new Error("Botmancers API is not configured"),
+    });
+  }
+}
 
 const DEFAULT_TRANSIENT_STATUSES = [408, 425, 429, 500, 502, 503, 504] as const;
 
@@ -35,7 +71,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-export class BotmancersHttpClient {
+export class BotmancersHttpClient implements BotmancersClient {
   readonly #fetch: BotmancersFetch;
   readonly #baseUrl: URL;
   readonly #timeoutMs: number;

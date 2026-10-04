@@ -7,8 +7,15 @@ import {
   PlanApprovalError,
   createBotmancersClonePlan,
   withReviewedPlanDigest,
-  type BotmancersHttpClient,
+  type BotmancersClient,
 } from "@clone-market/target-botmancers";
+
+import {
+  ArtifactSinkError,
+  BOTMANCERS_IMPORT_ARTIFACT,
+  artifactDigest,
+  type ArtifactSink,
+} from "./artifact-sink.js";
 
 export type CatalogFilters = {
   category?: string;
@@ -42,11 +49,20 @@ export type Review = {
 
 export type ReviewResponse = Omit<Review, "manifest">;
 
+export type ArtifactExportResult = {
+  identity: string;
+  created: boolean;
+  path: string;
+  digest: string;
+  verification: VerifyResult;
+};
+
 type Dependencies = {
   catalog: CatalogRepository;
   evidence: Pick<EvidenceService, "getLatest">;
   source(source: string): SourceAdapter;
-  botmancers: BotmancersHttpClient;
+  botmancers: BotmancersClient;
+  artifacts?: ArtifactSink;
   now?: () => string;
   manifestFilterConcurrency?: number;
 };
@@ -80,9 +96,17 @@ async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, ope
 }
 
 export class MarketError extends Error {
-  constructor(readonly code: "not_found" | "source_drift" | "stored_data_unavailable" | "target_unavailable" | "unsafe_plan" | "stale_plan" | "approval_required", message: string) {
+  constructor(readonly code: "not_found" | "source_drift" | "stored_data_unavailable" | "target_unavailable" | "sink_unavailable" | "unsafe_plan" | "stale_plan" | "approval_required", message: string) {
     super(message);
   }
+}
+
+function sinkError(error: unknown, fallback: string): MarketError {
+  if (error instanceof ArtifactSinkError) {
+    const code = error.code === "identity_conflict" ? "stale_plan" : "sink_unavailable";
+    return new MarketError(code, error.message);
+  }
+  return new MarketError("sink_unavailable", error instanceof Error ? error.message : fallback);
 }
 
 export class MarketService {
@@ -271,5 +295,107 @@ export class MarketService {
       if (error instanceof PlanApprovalError) throw approvalError(error);
       throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers verification failed");
     }
+  }
+
+  async #approvedReview(input: ReviewInput & { planDigest: string; reviewedAt: string; approved: boolean }): Promise<Review> {
+    if (!input.approved) throw new MarketError("approval_required", "Explicit approval is required");
+    const review = await this.#review(input, input.reviewedAt);
+    if (review.plan.id !== input.planDigest) throw new MarketError("stale_plan", "The source or target plan changed; review the new preview");
+    if (review.compatibility.summary.unsafe > 0) throw new MarketError("unsafe_plan", "Unsafe components cannot be applied");
+    if (review.compatibility.summary.partial > 0) throw new MarketError("unsafe_plan", "Partial mappings must be resolved before apply");
+    return review;
+  }
+
+  #artifactIdentity(source: SourceIdentity, planDigest: string): string {
+    const operationHash = createHash("sha256")
+      .update(`export\0${source.provider}\0${source.externalId}\0${planDigest}`)
+      .digest("hex");
+    return `export-${operationHash.slice(0, 24)}`;
+  }
+
+  async #verifyStoredArtifact(review: Review, identity: string): Promise<VerifyResult> {
+    const expected = review.preview.artifacts.find((artifact) => artifact.path === BOTMANCERS_IMPORT_ARTIFACT)?.content;
+    const sink = this.#deps.artifacts;
+    const operationHash = createHash("sha256")
+      .update(`verify-artifact\0${review.plan.id}\0${identity}`)
+      .digest("hex");
+    const operationId = `verify-${operationHash.slice(0, 24)}`;
+    const checkedAt = this.#now();
+    if (sink === undefined) {
+      throw new MarketError("sink_unavailable", "No artifact sink is configured");
+    }
+    let stored: string | undefined;
+    try {
+      stored = await sink.read(identity, BOTMANCERS_IMPORT_ARTIFACT);
+    } catch (error) {
+      throw sinkError(error, "Artifact sink is unavailable");
+    }
+    const checks: VerifyResult["checks"] = [];
+    if (expected === undefined) {
+      checks.push({ name: "plan-import-json", passed: false, detail: "Reviewed preview has no botmancers/import.json artifact" });
+    } else {
+      checks.push({ name: "plan-import-json", passed: true, detail: "Reviewed preview includes botmancers/import.json" });
+    }
+    if (stored === undefined) {
+      checks.push({ name: "exported-import-json", passed: false, detail: `No ${BOTMANCERS_IMPORT_ARTIFACT} at artifact identity ${identity}` });
+    } else {
+      checks.push({ name: "exported-import-json", passed: true, detail: `Read ${BOTMANCERS_IMPORT_ARTIFACT} from the artifact sink` });
+    }
+    if (expected !== undefined && stored !== undefined) {
+      const expectedDigest = artifactDigest(expected);
+      const storedDigest = artifactDigest(stored);
+      const matches = expected === stored;
+      checks.push({
+        name: "artifact-content",
+        passed: matches,
+        detail: matches
+          ? "Exported import.json matches the reviewed plan payload"
+          : "Exported import.json does not match the reviewed plan payload",
+      });
+      checks.push({
+        name: "artifact-digest",
+        passed: expectedDigest === storedDigest,
+        detail: matches
+          ? `Artifact digest ${storedDigest} matches the reviewed plan`
+          : `Stored digest ${storedDigest} does not match plan digest ${expectedDigest}`,
+      });
+    }
+    return {
+      schemaVersion: "1.0.0",
+      status: checks.every((check) => check.passed) ? "passed" : "failed",
+      operationId,
+      targetReference: identity,
+      checkedAt,
+      checks,
+    };
+  }
+
+  async exportArtifact(input: ReviewInput & { planDigest: string; reviewedAt: string; approved: boolean }): Promise<ArtifactExportResult> {
+    const review = await this.#approvedReview(input);
+    const sink = this.#deps.artifacts;
+    if (sink === undefined) throw new MarketError("sink_unavailable", "No artifact sink is configured");
+    const identity = this.#artifactIdentity(input.source, review.plan.id);
+    const importJson = review.preview.artifacts.find((artifact) => artifact.path === BOTMANCERS_IMPORT_ARTIFACT);
+    if (importJson === undefined) throw new MarketError("unsafe_plan", "Preview did not produce a Botmancers import.json artifact");
+    let put;
+    try {
+      put = await sink.put(identity, review.preview.artifacts);
+    } catch (error) {
+      throw sinkError(error, "Artifact sink is unavailable");
+    }
+    const verification = await this.#verifyStoredArtifact(review, identity);
+    return {
+      identity: put.identity,
+      created: put.created,
+      path: BOTMANCERS_IMPORT_ARTIFACT,
+      digest: artifactDigest(importJson.content),
+      verification,
+    };
+  }
+
+  async verifyArtifact(input: ReviewInput & { planDigest: string; reviewedAt: string; artifactIdentity: string }): Promise<VerifyResult> {
+    const review = await this.#review(input, input.reviewedAt);
+    if (review.plan.id !== input.planDigest) throw new MarketError("stale_plan", "The reviewed plan changed before verification");
+    return this.#verifyStoredArtifact(review, input.artifactIdentity);
   }
 }

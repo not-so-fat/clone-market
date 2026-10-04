@@ -4,3 +4,5 @@ dist/
 coverage/
 .next/
 .DS_Store
+.temporal/
+/data/
