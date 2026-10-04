@@ -36,8 +36,11 @@ Foundation contracts, the Grok Marketplace source adapter, the central public
 index catalog, reviewed public-evidence labels, the Botmancers target adapter,
 and the Clone Market web surface are implemented. Offline V0 acceptance
 (`npm run smoke:v0`) proves complete fixture-catalog reconciliation, evidence-backed
-labels, preview → approve → apply → verify against an in-process Botmancers stub,
-idempotent retry, and typed non-mutating failure paths.
+labels whose contributions are checked for `installCount` and private-usage signals,
+preview → approve → apply → verify against an in-process Botmancers stub, replay of
+the same operation id, and typed non-mutating failure paths (including Botmancers
+unavailable at apply). Live smoke reads `CLONE_MARKET_EVIDENCE_DB` and writes
+`CLONE_MARKET_CATALOG_DB` for the web UI; it is **[operator]**-only.
 
 Live end-to-end proof against the current public Marketplace and a local Botmancers
 instance remains an **[operator]** run (`docs/acceptance-v0.md`). Browser recordings
@@ -52,3 +55,4 @@ and UI captures are operator evidence, not part of the default offline suite.
 - Multi-user hosting, billing, or analytics
 - Marketplace schema stability (undocumented HTML/RSC surface may drift)
 - Whether every public template remains importable when Botmancers capabilities change
+- Botmancers package-root `npm test` / `npm run typecheck` unless `BOTMANCERS_ROOT` is set (Clone Market does not vendor that repository)

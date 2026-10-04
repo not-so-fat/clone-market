@@ -30,7 +30,7 @@ Preview is side-effect free. Apply requires `approved: true`, `planDigest`, and 
 Machine-readable offline acceptance lives in `src/acceptance/` and is documented in [`docs/acceptance-v0.md`](../../docs/acceptance-v0.md).
 
 - **[agent]** `npm run smoke:v0` from the repository root (network-free fixture + stub).
-- **[operator]** `CLONE_MARKET_ACCEPTANCE_LIVE=1 npm run smoke:v0:live` plus the browser checklist below.
+- **[operator]** `CLONE_MARKET_ACCEPTANCE_LIVE=1` plus `CLONE_MARKET_CATALOG_DB` / `CLONE_MARKET_EVIDENCE_DB` (reviewed rows already imported) and `npm run smoke:v0:live`. The catalog DB is retained for `next dev`.
 
 ## Operator browser checklist **[operator]**
 

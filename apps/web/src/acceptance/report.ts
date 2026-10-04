@@ -1,11 +1,14 @@
 import type { AdoptionSnapshot, SourceIdentity, VerifyResult } from "@clone-market/core";
 import type { RuleContribution, StoredEvidence } from "@clone-market/evidence";
 
+import type { PeerRepoCheck } from "./peer-repo.js";
+
 export type AcceptanceStatus = "passed" | "failed";
 
 export type FailureCaseId =
   | "source_schema_drift"
   | "botmancers_unavailable"
+  | "botmancers_unavailable_apply"
   | "changed_plan_after_preview"
   | "idempotent_retry";
 
@@ -18,6 +21,11 @@ export type FailureCaseReport = {
   detail: string;
 };
 
+export type AcceptanceErrorReport = {
+  code: string;
+  message: string;
+};
+
 export type V0AcceptanceReport = {
   schemaVersion: "1.0.0";
   suite: "v0-acceptance";
@@ -25,6 +33,12 @@ export type V0AcceptanceReport = {
   mode: "fixture" | "live";
   status: AcceptanceStatus;
   exitCode: number;
+  error?: AcceptanceErrorReport;
+  databases: {
+    catalogPath: string;
+    evidencePath: string;
+    retainedAfterRun: boolean;
+  };
   source: {
     retrievedAt: string;
     /** Observed Marketplace index size for this run — never a product hard-cap. */
@@ -39,21 +53,21 @@ export type V0AcceptanceReport = {
     unchanged: number;
     unexplainedOmissions: SourceIdentity[];
   };
-  template: {
+  template?: {
     source: SourceIdentity;
     provenanceUrl: string;
     retrievedAt: string;
     name: string;
   };
-  evidence: {
+  evidence?: {
     label: AdoptionSnapshot["label"];
     snapshot: AdoptionSnapshot;
     contributions: RuleContribution[];
     evidenceRows: StoredEvidence[];
-    usesInstallCount: false;
-    usesPrivateUsage: false;
+    usesInstallCount: boolean;
+    usesPrivateUsage: boolean;
   };
-  compatibility: {
+  compatibility?: {
     planDigest: string;
     summary: {
       exact: number;
@@ -63,22 +77,26 @@ export type V0AcceptanceReport = {
       unsafe: number;
     };
   };
-  approval: {
+  approval?: {
     approved: true;
     reviewedAt: string;
     planDigest: string;
   };
-  target: {
+  target?: {
     operationId: string;
     botmancersBotId: string;
     verification: VerifyResult;
     returnUrl: string;
+    replaySameBot?: boolean;
   };
   browser: {
     status: "operator_required" | "recorded";
     notes: string;
   };
   failureCases: FailureCaseReport[];
+  peerRepositories: {
+    botmancers: PeerRepoCheck;
+  };
 };
 
 export function rollupStatus(parts: AcceptanceStatus[]): AcceptanceStatus {

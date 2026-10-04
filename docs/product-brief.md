@@ -1,12 +1,12 @@
 # Clone Market product brief
 
-**Status:** V0 implementation assembled; offline acceptance harness proven; live operator proof pending
+**Status:** V0 implementation assembled; offline acceptance harness proven (fixture catalog, reviewed-evidence labels, stub apply/verify, injected failures); live operator proof pending
 
-**Updated:** 2026-10-03
+**Updated:** 2026-10-04
 
 **Decision:** Build a complete, source-linked index of public Grok Bot templates, progressively enrich every template with public adoption evidence, and support private compatibility-aware imports without republishing creators' configurations.
 
-**Proven offline (fixture / stub):** complete captured Marketplace reconciliation without a hard-coded catalog cap; evidence-backed adoption labels with inspectable contributions; reviewed Botmancers preview → explicit approval → apply → read-after-write verification; idempotent target-operation replay; typed non-mutating failures for source drift, Botmancers unavailability, and changed plan digests. See `docs/acceptance-v0.md` and `npm run smoke:v0`.
+**Proven offline (fixture / stub):** complete captured Marketplace reconciliation without a hard-coded catalog cap; evidence-backed adoption labels with inspectable contributions and guards that fail if the label uses `installCount` or private usage; reviewed Botmancers preview → explicit approval → apply → read-after-write verification; replay of the same target operation id against the stub; typed non-mutating failures for source drift, Botmancers unavailability at preview and apply, and changed plan digests. Live mode does not seed fixture evidence; it requires `CLONE_MARKET_EVIDENCE_DB` and retains `CLONE_MARKET_CATALOG_DB` for the UI. See `docs/acceptance-v0.md` and `npm run smoke:v0`.
 
 **Still operator / external:** live Marketplace traversal against today’s public HTML/RSC surface; browser recording of catalog → inspector → preview → apply → verify plus Botmancers return; continuous freshness of public evidence rows.
 
@@ -182,6 +182,7 @@ Offline fixture acceptance covers items 1–7 against captured Marketplace HTML 
 - Public Grok schema may drift without notice; drift fails visibly rather than guessing.
 - Agent Deck and coding-agent targets are out of V0 scope.
 - Live Botmancers API/UI availability and auth are external to Clone Market.
+- Botmancers root offline tests are not vendored; they run only when `BOTMANCERS_ROOT` is provided.
 
 ## Negative space
 

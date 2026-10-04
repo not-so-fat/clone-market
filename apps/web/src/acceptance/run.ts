@@ -1,28 +1,31 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import type { ClonePolicy } from "@clone-market/compatibility";
 import type { SourceAdapter, SourceIdentity, VerifyResult } from "@clone-market/core";
+import { EvidenceService, SqliteEvidenceRepository } from "@clone-market/evidence";
 import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
 
+import { botmancersBotUrl } from "../botmancers-url.js";
 import { createV1Handlers } from "../http.js";
 import { MarketService } from "../market.js";
 import {
   ACCEPTANCE_CAPABILITIES,
   BotmancersAcceptanceStub,
-  botmancersReturnUrl,
 } from "./botmancers-stub.js";
+import { AcceptanceFailure, acceptanceError } from "./error.js";
 import {
   ACCEPTANCE_NOW,
   CHOSEN_SOURCE,
-  CHOSEN_TEMPLATE_ID,
   createFixtureGrokAdapter,
   reconcileFixtureCatalog,
   seedAcceptanceEvidence,
 } from "./fixtures.js";
+import { adoptionLabelFlags } from "./label-guards.js";
+import { verifyBotmancersPeerRepo } from "./peer-repo.js";
 import {
   rollupStatus,
   type FailureCaseReport,
@@ -43,6 +46,11 @@ export type RunV0AcceptanceOptions = {
   botmancersUiBaseUrl?: string;
   botmancersBaseUrl?: string;
   grokBaseUrl?: string;
+  catalogPath?: string;
+  evidencePath?: string;
+  source?: SourceIdentity;
+  verifyPeerRepos?: boolean;
+  botmancersRoot?: string;
   now?: () => string;
 };
 
@@ -53,8 +61,28 @@ type ApplyBody = {
   verification?: VerifyResult;
 };
 
-function params(source: SourceIdentity = CHOSEN_SOURCE) {
+type EvidenceLookup = {
+  snapshot?: NonNullable<V0AcceptanceReport["evidence"]>["snapshot"];
+  contributions: NonNullable<V0AcceptanceReport["evidence"]>["contributions"];
+  evidence: NonNullable<V0AcceptanceReport["evidence"]>["evidenceRows"];
+};
+
+function params(source: SourceIdentity) {
   return { provider: source.provider, externalId: source.externalId };
+}
+
+function parseSource(value: string | undefined, fallback: SourceIdentity): SourceIdentity {
+  if (value === undefined || value.length === 0) return fallback;
+  const separator = value.indexOf(":");
+  if (separator <= 0 || separator === value.length - 1) {
+    return { provider: fallback.provider, externalId: value };
+  }
+  return { provider: value.slice(0, separator), externalId: value.slice(separator + 1) };
+}
+
+function responseError(response: { status: number; body: unknown }, fallback: string): never {
+  const error = (response.body as { error?: { code?: string; message?: string } }).error;
+  throw new AcceptanceFailure(error?.code ?? fallback, error?.message ?? JSON.stringify(response.body));
 }
 
 async function unexplainedOmissions(
@@ -76,12 +104,42 @@ async function unexplainedOmissions(
   return missing;
 }
 
+function inspectEvidence(
+  handlersBody: EvidenceLookup,
+  source: SourceIdentity,
+): NonNullable<V0AcceptanceReport["evidence"]> {
+  if (handlersBody.snapshot === undefined) {
+    throw new AcceptanceFailure("missing_reviewed_evidence", `No adoption snapshot for ${source.provider}:${source.externalId}; import reviewed evidence first`);
+  }
+  if (handlersBody.snapshot.label === "listed" && handlersBody.evidence.length === 0) {
+    throw new AcceptanceFailure("label_missing_evidence", "Displayed label must open to evidence rows");
+  }
+  if (handlersBody.contributions.length === 0) {
+    throw new AcceptanceFailure("label_missing_evidence", "Adoption label is missing rule contributions");
+  }
+  const flags = adoptionLabelFlags({
+    snapshot: handlersBody.snapshot,
+    contributions: handlersBody.contributions,
+    evidenceRows: handlersBody.evidence,
+  });
+  return {
+    label: handlersBody.snapshot.label,
+    snapshot: handlersBody.snapshot,
+    contributions: handlersBody.contributions,
+    evidenceRows: handlersBody.evidence,
+    usesInstallCount: flags.usesInstallCount,
+    usesPrivateUsage: flags.usesPrivateUsage,
+  };
+}
+
 async function runFailureCases(input: {
   catalogPath: string;
-  evidence: Awaited<ReturnType<typeof seedAcceptanceEvidence>>["service"];
+  evidence: EvidenceService;
   now: () => string;
+  source: SourceIdentity;
 }): Promise<FailureCaseReport[]> {
   const cases: FailureCaseReport[] = [];
+  const identity = params(input.source);
 
   {
     const stub = new BotmancersAcceptanceStub();
@@ -94,7 +152,7 @@ async function runFailureCases(input: {
       botmancers: stub.client(),
       now: input.now,
     }));
-    const response = await handlers.preview({ params: params(), body: { policy: POLICY } });
+    const response = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const code = (response.body as { error?: { code?: string } }).error?.code;
     const posts = stub.calls.filter((call) => call.method === "POST").length;
     cases.push({
@@ -122,7 +180,7 @@ async function runFailureCases(input: {
       botmancers: stub.client(),
       now: input.now,
     }));
-    const response = await handlers.preview({ params: params(), body: { policy: POLICY } });
+    const response = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const code = (response.body as { error?: { code?: string } }).error?.code;
     cases.push({
       id: "botmancers_unavailable",
@@ -130,7 +188,42 @@ async function runFailureCases(input: {
       expectedCode: "target_unavailable",
       httpStatus: response.status,
       mutating: false,
-      detail: `target_unavailable status=${response.status}; bots=${stub.botCount()}`,
+      detail: `preview target_unavailable status=${response.status}; bots=${stub.botCount()}`,
+    });
+    catalog.close();
+  }
+
+  {
+    const stub = new BotmancersAcceptanceStub();
+    const catalog = new SqliteCatalogRepository(input.catalogPath);
+    const adapter = await createFixtureGrokAdapter("happy");
+    const handlers = createV1Handlers(new MarketService({
+      catalog,
+      evidence: input.evidence,
+      source: () => adapter,
+      botmancers: stub.client(),
+      now: input.now,
+    }));
+    const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
+    const previewBody = preview.body as { plan: { id: string; createdAt: string } };
+    stub.offline = true;
+    const apply = await handlers.apply({
+      params: identity,
+      body: {
+        policy: POLICY,
+        planDigest: previewBody.plan?.id,
+        reviewedAt: previewBody.plan?.createdAt,
+        approved: true,
+      },
+    });
+    const code = (apply.body as { error?: { code?: string } }).error?.code;
+    cases.push({
+      id: "botmancers_unavailable_apply",
+      status: apply.status === 503 && code === "target_unavailable" && stub.botCount() === 0 ? "passed" : "failed",
+      expectedCode: "target_unavailable",
+      httpStatus: apply.status,
+      mutating: false,
+      detail: `apply target_unavailable status=${apply.status}; bots=${stub.botCount()}`,
     });
     catalog.close();
   }
@@ -147,14 +240,14 @@ async function runFailureCases(input: {
       now: input.now,
     });
     const handlers = createV1Handlers(market);
-    const preview = await handlers.preview({ params: params(), body: { policy: POLICY } });
+    const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const previewBody = preview.body as { plan: { id: string; createdAt: string } };
     stub.capabilities = {
       ...ACCEPTANCE_CAPABILITIES,
       memories: "unsupported",
     };
     const apply = await handlers.apply({
-      params: params(),
+      params: identity,
       body: {
         policy: POLICY,
         planDigest: previewBody.plan.id,
@@ -185,7 +278,7 @@ async function runFailureCases(input: {
       botmancers: stub.client(),
       now: input.now,
     }));
-    const preview = await handlers.preview({ params: params(), body: { policy: POLICY } });
+    const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const previewBody = preview.body as { plan: { id: string; createdAt: string } };
     const body = {
       policy: POLICY,
@@ -193,8 +286,8 @@ async function runFailureCases(input: {
       reviewedAt: previewBody.plan.createdAt,
       approved: true,
     };
-    const first = await handlers.apply({ params: params(), body });
-    const second = await handlers.apply({ params: params(), body });
+    const first = await handlers.apply({ params: identity, body });
+    const second = await handlers.apply({ params: identity, body });
     const firstBody = first.body as ApplyBody;
     const secondBody = second.body as ApplyBody;
     const sameBot = firstBody.result?.targetReference === secondBody.result?.targetReference;
@@ -213,88 +306,50 @@ async function runFailureCases(input: {
   return cases;
 }
 
-async function runFixtureHappyPath(input: {
-  catalogPath: string;
-  evidence: Awaited<ReturnType<typeof seedAcceptanceEvidence>>["service"];
-  stub: BotmancersAcceptanceStub;
-  now: () => string;
+async function previewAndApply(input: {
+  handlers: ReturnType<typeof createV1Handlers>;
+  source: SourceIdentity;
   uiBaseUrl: string;
-}): Promise<Omit<V0AcceptanceReport, "schemaVersion" | "suite" | "generatedAt" | "mode" | "status" | "exitCode" | "failureCases" | "browser" | "source" | "reconciliation">> {
-  const catalog = new SqliteCatalogRepository(input.catalogPath);
-  const adapter = await createFixtureGrokAdapter("happy");
-  const handlers = createV1Handlers(new MarketService({
-    catalog,
-    evidence: input.evidence,
-    source: () => adapter,
-    botmancers: input.stub.client(),
-    now: input.now,
-  }));
-
-  const catalogResponse = await handlers.catalog();
-  if (catalogResponse.status !== 200) throw new Error(`Catalog listing failed: ${JSON.stringify(catalogResponse.body)}`);
-  const catalogBody = catalogResponse.body as { total: number; items: Array<{ id: string; sourceMetadata?: { installCount?: number } }> };
-  if (catalogBody.total < 1) throw new Error("Catalog traversal returned zero templates");
-
-  const evidenceResponse = await handlers.evidence({ params: params() });
-  if (evidenceResponse.status !== 200) throw new Error(`Evidence lookup failed: ${JSON.stringify(evidenceResponse.body)}`);
-  const evidenceBody = evidenceResponse.body as {
-    snapshot?: V0AcceptanceReport["evidence"]["snapshot"];
-    contributions: V0AcceptanceReport["evidence"]["contributions"];
-    evidence: V0AcceptanceReport["evidence"]["evidenceRows"];
-  };
-  if (evidenceBody.snapshot === undefined) throw new Error("Chosen template has no adoption snapshot");
-  if (evidenceBody.snapshot.label === "listed" && evidenceBody.evidence.length === 0) {
-    throw new Error("Displayed label must open to evidence rows");
-  }
-  if (evidenceBody.contributions.length === 0) throw new Error("Adoption label is missing rule contributions");
-  const chosenCatalog = catalogBody.items.find((item) => item.id === CHOSEN_TEMPLATE_ID);
-  if (chosenCatalog?.sourceMetadata?.installCount === 0) {
-    // installCount may be stored as source metadata; labels must not use it.
-  }
-
-  const preview = await handlers.preview({ params: params(), body: { policy: POLICY } });
-  if (preview.status !== 200) throw new Error(`Preview failed: ${JSON.stringify(preview.body)}`);
+  replay: boolean;
+}): Promise<{
+  compatibility: NonNullable<V0AcceptanceReport["compatibility"]>;
+  approval: NonNullable<V0AcceptanceReport["approval"]>;
+  target: NonNullable<V0AcceptanceReport["target"]>;
+}> {
+  const identity = params(input.source);
+  const preview = await input.handlers.preview({ params: identity, body: { policy: POLICY } });
+  if (preview.status !== 200) responseError(preview, "preview_failed");
   const previewBody = preview.body as {
     plan: { id: string; createdAt: string };
-    compatibility: { summary: V0AcceptanceReport["compatibility"]["summary"] };
-    preview: { summary: string };
+    compatibility: { summary: NonNullable<V0AcceptanceReport["compatibility"]>["summary"] };
   };
-  if (input.stub.botCount() !== 0) throw new Error("Preview mutated Botmancers");
-
-  const apply = await handlers.apply({
-    params: params(),
-    body: {
-      policy: POLICY,
-      planDigest: previewBody.plan.id,
-      reviewedAt: previewBody.plan.createdAt,
-      approved: true,
-    },
-  });
-  if (apply.status !== 200) throw new Error(`Apply failed: ${JSON.stringify(apply.body)}`);
+  const applyBodyPayload = {
+    policy: POLICY,
+    planDigest: previewBody.plan.id,
+    reviewedAt: previewBody.plan.createdAt,
+    approved: true,
+  };
+  const apply = await input.handlers.apply({ params: identity, body: applyBodyPayload });
+  if (apply.status !== 200) responseError(apply, "apply_failed");
   const applyBody = apply.body as ApplyBody;
   if (applyBody.verification?.status !== "passed") {
-    throw new Error(`Verification did not pass: ${JSON.stringify(applyBody.verification ?? applyBody)}`);
+    throw new AcceptanceFailure("verification_failed", `Verification did not pass: ${JSON.stringify(applyBody.verification ?? applyBody)}`);
   }
-
-  const detail = await handlers.detail({ params: params() });
-  const detailBody = detail.body as { manifest: { provenanceUrl: string; retrievedAt: string; template: { name: string } } };
-
-  catalog.close();
+  let replaySameBot: boolean | undefined;
+  if (input.replay) {
+    const replayed = await input.handlers.apply({ params: identity, body: applyBodyPayload });
+    if (replayed.status !== 200) responseError(replayed, "apply_failed");
+    const replayBody = replayed.body as ApplyBody;
+    replaySameBot = replayBody.result?.targetReference === applyBody.result.targetReference
+      && replayBody.operation?.operationId === applyBody.operation.operationId;
+    if (replaySameBot !== true) {
+      throw new AcceptanceFailure(
+        "duplicate_bot",
+        `Replaying ${applyBody.operation.operationId} created ${replayBody.result?.targetReference} instead of ${applyBody.result.targetReference}`,
+      );
+    }
+  }
   return {
-    template: {
-      source: CHOSEN_SOURCE,
-      provenanceUrl: detailBody.manifest.provenanceUrl,
-      retrievedAt: detailBody.manifest.retrievedAt,
-      name: detailBody.manifest.template.name,
-    },
-    evidence: {
-      label: evidenceBody.snapshot.label,
-      snapshot: evidenceBody.snapshot,
-      contributions: evidenceBody.contributions,
-      evidenceRows: evidenceBody.evidence,
-      usesInstallCount: false,
-      usesPrivateUsage: false,
-    },
     compatibility: {
       planDigest: previewBody.plan.id,
       summary: previewBody.compatibility.summary,
@@ -308,154 +363,111 @@ async function runFixtureHappyPath(input: {
       operationId: applyBody.operation.operationId,
       botmancersBotId: applyBody.result.targetReference,
       verification: applyBody.verification!,
-      returnUrl: botmancersReturnUrl(input.uiBaseUrl, applyBody.result.targetReference),
+      returnUrl: botmancersBotUrl(input.uiBaseUrl, applyBody.result.targetReference),
+      ...(replaySameBot === undefined ? {} : { replaySameBot }),
     },
   };
 }
 
-async function runLiveHappyPath(input: {
-  catalogPath: string;
-  evidence: Awaited<ReturnType<typeof seedAcceptanceEvidence>>["service"];
-  now: () => string;
-  uiBaseUrl: string;
-  botmancersBaseUrl: string;
-  grokBaseUrl: string;
-}): Promise<{
-  source: V0AcceptanceReport["source"];
-  reconciliation: V0AcceptanceReport["reconciliation"];
-  happy: Awaited<ReturnType<typeof runFixtureHappyPath>>;
-}> {
-  const adapter = new GrokMarketplaceAdapter({ baseUrl: input.grokBaseUrl, now: input.now });
-  const { runCatalogReconciliation } = await import("@clone-market/catalog");
-  const reconciliationReport = await runCatalogReconciliation({
-    adapter,
-    databasePath: input.catalogPath,
-    now: input.now,
-  });
-  const catalog = new SqliteCatalogRepository(input.catalogPath);
-  const omissions = await unexplainedOmissions(catalog, adapter);
-  const entry = await catalog.getTemplate(CHOSEN_SOURCE);
-  if (entry === undefined) {
-    catalog.close();
-    throw new Error(`Live Marketplace index did not include ${CHOSEN_SOURCE.externalId}; pick another public non-sensitive template in the runbook`);
-  }
-  const client = new BotmancersHttpClient({ baseUrl: input.botmancersBaseUrl, maxRetries: 0 });
-  const handlers = createV1Handlers(new MarketService({
-    catalog,
-    evidence: input.evidence,
-    source: () => adapter,
-    botmancers: client,
-    now: input.now,
-  }));
-  const preview = await handlers.preview({ params: params(CHOSEN_SOURCE), body: { policy: POLICY } });
-  if (preview.status !== 200) throw new Error(`Live preview failed: ${JSON.stringify(preview.body)}`);
-  const previewBody = preview.body as {
-    plan: { id: string; createdAt: string };
-    compatibility: { summary: V0AcceptanceReport["compatibility"]["summary"] };
-  };
-  const apply = await handlers.apply({
-    params: params(CHOSEN_SOURCE),
-    body: {
-      policy: POLICY,
-      planDigest: previewBody.plan.id,
-      reviewedAt: previewBody.plan.createdAt,
-      approved: true,
-    },
-  });
-  if (apply.status !== 200) throw new Error(`Live apply failed: ${JSON.stringify(apply.body)}`);
-  const applyBody = apply.body as ApplyBody;
-  if (applyBody.verification?.status !== "passed") {
-    throw new Error(`Live verification did not pass: ${JSON.stringify(applyBody.verification ?? applyBody)}`);
-  }
-  const evidenceResponse = await handlers.evidence({ params: params(CHOSEN_SOURCE) });
-  const evidenceBody = evidenceResponse.body as {
-    snapshot?: V0AcceptanceReport["evidence"]["snapshot"];
-    contributions: V0AcceptanceReport["evidence"]["contributions"];
-    evidence: V0AcceptanceReport["evidence"]["evidenceRows"];
-  };
-  if (evidenceBody.snapshot === undefined) {
-    catalog.close();
-    throw new Error("Live chosen template has no seeded adoption snapshot; import reviewed evidence first");
-  }
-  catalog.close();
-  return {
-    source: {
-      retrievedAt: reconciliationReport.retrievedAt,
-      count: reconciliationReport.total,
-      url: input.grokBaseUrl,
-    },
-    reconciliation: {
-      added: reconciliationReport.added,
-      changed: reconciliationReport.changed,
-      removed: reconciliationReport.removed,
-      reappeared: reconciliationReport.reappeared,
-      unchanged: reconciliationReport.unchanged,
-      unexplainedOmissions: omissions,
-    },
-    happy: {
-      template: {
-        source: CHOSEN_SOURCE,
-        provenanceUrl: entry.provenance.url,
-        retrievedAt: entry.provenance.retrievedAt,
-        name: entry.name,
-      },
-      evidence: {
-        label: evidenceBody.snapshot.label,
-        snapshot: evidenceBody.snapshot,
-        contributions: evidenceBody.contributions,
-        evidenceRows: evidenceBody.evidence,
-        usesInstallCount: false,
-        usesPrivateUsage: false,
-      },
-      compatibility: {
-        planDigest: previewBody.plan.id,
-        summary: previewBody.compatibility.summary,
-      },
-      approval: {
-        approved: true,
-        reviewedAt: previewBody.plan.createdAt,
-        planDigest: previewBody.plan.id,
-      },
-      target: {
-        operationId: applyBody.operation.operationId,
-        botmancersBotId: applyBody.result.targetReference,
-        verification: applyBody.verification!,
-        returnUrl: botmancersReturnUrl(input.uiBaseUrl, applyBody.result.targetReference),
-      },
-    },
-  };
+function emptySource(now: string, url: string): V0AcceptanceReport["source"] {
+  return { retrievedAt: now, count: 0, url };
+}
+
+function emptyReconciliation(): V0AcceptanceReport["reconciliation"] {
+  return { added: 0, changed: 0, removed: 0, reappeared: 0, unchanged: 0, unexplainedOmissions: [] };
 }
 
 export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Promise<V0AcceptanceReport> {
   const mode = options.mode ?? "fixture";
   const now = options.now ?? (() => ACCEPTANCE_NOW);
-  const uiBaseUrl = options.botmancersUiBaseUrl ?? "http://127.0.0.1:3100/";
+  const generatedAt = now();
+  const uiBaseUrl = options.botmancersUiBaseUrl ?? process.env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL ?? "http://127.0.0.1:3100/";
+  const sourceIdentity = options.source
+    ?? parseSource(process.env.CLONE_MARKET_ACCEPTANCE_TEMPLATE, CHOSEN_SOURCE);
   const work = mkdtempSync(join(tmpdir(), "clone-market-v0-"));
-  const catalogPath = join(work, "catalog.sqlite");
   const failureCatalogPath = join(work, "failure-catalog.sqlite");
-  const evidencePath = join(work, "evidence.sqlite");
+  const fixtureEvidencePath = join(work, "evidence.sqlite");
+  const persistOperatorDbs = mode === "live";
+  const catalogPath = persistOperatorDbs
+    ? (options.catalogPath ?? process.env.CLONE_MARKET_CATALOG_DB)
+    : join(work, "catalog.sqlite");
+  const evidencePath = persistOperatorDbs
+    ? (options.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB)
+    : fixtureEvidencePath;
   let closeEvidence: (() => void) | undefined;
+  let closeFailureEvidence: (() => void) | undefined;
+  let closeCatalog: (() => void) | undefined;
+  let evidence: EvidenceService | undefined;
+
+  const report: V0AcceptanceReport = {
+    schemaVersion: "1.0.0",
+    suite: "v0-acceptance",
+    generatedAt,
+    mode,
+    status: "failed",
+    exitCode: 1,
+    databases: {
+      catalogPath: catalogPath ?? "",
+      evidencePath: evidencePath ?? "",
+      retainedAfterRun: persistOperatorDbs,
+    },
+    source: emptySource(generatedAt, mode === "live" ? (options.grokBaseUrl ?? process.env.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/") : "fixture:packages/source-grok/test/fixtures/marketplace-index-2026-10-02.html"),
+    reconciliation: emptyReconciliation(),
+    browser: {
+      status: "operator_required",
+      notes: "Record catalog → inspector → preview → apply → verify plus Botmancers return in a real browser; see docs/acceptance-v0.md ([operator]).",
+    },
+    failureCases: [],
+    peerRepositories: {
+      botmancers: {
+        status: "skipped",
+        returnRouteConfirmed: false,
+        idempotencyKeyConfirmed: false,
+        detail: "Peer verification not requested for this run.",
+      },
+    },
+  };
+
+  const writeReport = () => {
+    if (options.reportPath) {
+      mkdirSync(dirname(options.reportPath), { recursive: true });
+      writeFileSync(options.reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    }
+  };
 
   try {
-    const seeded = await seedAcceptanceEvidence(evidencePath);
-    closeEvidence = seeded.close;
-    const evidence = seeded.service;
-    let source: V0AcceptanceReport["source"];
-    let reconciliation: V0AcceptanceReport["reconciliation"];
-    let happy: Awaited<ReturnType<typeof runFixtureHappyPath>>;
+    if (persistOperatorDbs) {
+      if (catalogPath === undefined || catalogPath.length === 0) {
+        throw new AcceptanceFailure("missing_catalog_db", "Live acceptance requires CLONE_MARKET_CATALOG_DB (retained for the web UI)");
+      }
+      if (evidencePath === undefined || evidencePath.length === 0) {
+        throw new AcceptanceFailure("missing_evidence_db", "Live acceptance requires CLONE_MARKET_EVIDENCE_DB with reviewed evidence rows");
+      }
+      if (!existsSync(evidencePath)) {
+        throw new AcceptanceFailure("missing_evidence_db", `Live evidence database not found at ${evidencePath}; import reviewed rows before smoke:v0:live`);
+      }
+      mkdirSync(dirname(catalogPath), { recursive: true });
+      const repository = new SqliteEvidenceRepository(evidencePath, { readOnly: true });
+      closeEvidence = () => repository.close();
+      evidence = new EvidenceService(repository);
+    } else {
+      const seeded = await seedAcceptanceEvidence(fixtureEvidencePath);
+      closeEvidence = seeded.close;
+      evidence = seeded.service;
+    }
 
     if (mode === "fixture") {
-      const reconciliationReport = await reconcileFixtureCatalog(catalogPath);
-      const catalog = new SqliteCatalogRepository(catalogPath);
+      const reconciliationReport = await reconcileFixtureCatalog(catalogPath!);
+      const catalog = new SqliteCatalogRepository(catalogPath!);
       const adapter = await createFixtureGrokAdapter("happy");
       const omissions = await unexplainedOmissions(catalog, adapter);
       catalog.close();
-      source = {
+      report.source = {
         retrievedAt: reconciliationReport.retrievedAt,
         count: reconciliationReport.total,
         url: "fixture:packages/source-grok/test/fixtures/marketplace-index-2026-10-02.html",
       };
-      reconciliation = {
+      report.reconciliation = {
         added: reconciliationReport.added,
         changed: reconciliationReport.changed,
         removed: reconciliationReport.removed,
@@ -463,63 +475,170 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         unchanged: reconciliationReport.unchanged,
         unexplainedOmissions: omissions,
       };
+      const catalogRepo = new SqliteCatalogRepository(catalogPath!);
+      closeCatalog = () => catalogRepo.close();
+      const handlers = createV1Handlers(new MarketService({
+        catalog: catalogRepo,
+        evidence,
+        source: () => adapter,
+        botmancers: new BotmancersAcceptanceStub().client(),
+        now,
+      }));
+      const catalogResponse = await handlers.catalog();
+      if (catalogResponse.status !== 200) responseError(catalogResponse, "catalog_failed");
+      const catalogBody = catalogResponse.body as { total: number };
+      if (catalogBody.total < 1) throw new AcceptanceFailure("catalog_empty", "Catalog traversal returned zero templates");
+      const evidenceResponse = await handlers.evidence({ params: params(sourceIdentity) });
+      if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
+      report.evidence = inspectEvidence(evidenceResponse.body as EvidenceLookup, sourceIdentity);
+      if (report.evidence.usesInstallCount || report.evidence.usesPrivateUsage) {
+        throw new AcceptanceFailure(
+          "label_uses_forbidden_metric",
+          `Adoption label used forbidden signals (installCount=${report.evidence.usesInstallCount}, privateUsage=${report.evidence.usesPrivateUsage})`,
+        );
+      }
       const stub = new BotmancersAcceptanceStub();
-      happy = await runFixtureHappyPath({
-        catalogPath,
+      const applyHandlers = createV1Handlers(new MarketService({
+        catalog: catalogRepo,
         evidence,
-        stub,
+        source: () => adapter,
+        botmancers: stub.client(),
         now,
+      }));
+      const previewCheck = await applyHandlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
+      if (previewCheck.status !== 200) responseError(previewCheck, "preview_failed");
+      if (stub.botCount() !== 0) throw new AcceptanceFailure("preview_mutated_target", "Preview mutated Botmancers");
+      const applied = await previewAndApply({
+        handlers: applyHandlers,
+        source: sourceIdentity,
         uiBaseUrl,
+        replay: true,
       });
+      const detail = await applyHandlers.detail({ params: params(sourceIdentity) });
+      const detailBody = detail.body as { manifest: { provenanceUrl: string; retrievedAt: string; template: { name: string } } };
+      report.template = {
+        source: sourceIdentity,
+        provenanceUrl: detailBody.manifest.provenanceUrl,
+        retrievedAt: detailBody.manifest.retrievedAt,
+        name: detailBody.manifest.template.name,
+      };
+      report.compatibility = applied.compatibility;
+      report.approval = applied.approval;
+      report.target = applied.target;
     } else {
-      const live = await runLiveHappyPath({
-        catalogPath,
-        evidence,
+      const grokBaseUrl = options.grokBaseUrl ?? process.env.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/";
+      const botmancersBaseUrl = options.botmancersBaseUrl ?? process.env.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/";
+      const adapter = new GrokMarketplaceAdapter({ baseUrl: grokBaseUrl, now });
+      const { runCatalogReconciliation } = await import("@clone-market/catalog");
+      const reconciliationReport = await runCatalogReconciliation({
+        adapter,
+        databasePath: catalogPath!,
         now,
-        uiBaseUrl,
-        botmancersBaseUrl: options.botmancersBaseUrl ?? process.env.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/",
-        grokBaseUrl: options.grokBaseUrl ?? process.env.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/",
       });
-      source = live.source;
-      reconciliation = live.reconciliation;
-      happy = live.happy;
+      const catalog = new SqliteCatalogRepository(catalogPath!);
+      closeCatalog = () => catalog.close();
+      const omissions = await unexplainedOmissions(catalog, adapter);
+      report.source = {
+        retrievedAt: reconciliationReport.retrievedAt,
+        count: reconciliationReport.total,
+        url: grokBaseUrl,
+      };
+      report.reconciliation = {
+        added: reconciliationReport.added,
+        changed: reconciliationReport.changed,
+        removed: reconciliationReport.removed,
+        reappeared: reconciliationReport.reappeared,
+        unchanged: reconciliationReport.unchanged,
+        unexplainedOmissions: omissions,
+      };
+      const entry = await catalog.getTemplate(sourceIdentity);
+      if (entry === undefined) {
+        throw new AcceptanceFailure(
+          "template_not_in_catalog",
+          `Live Marketplace index did not include ${sourceIdentity.provider}:${sourceIdentity.externalId}; pass CLONE_MARKET_ACCEPTANCE_TEMPLATE`,
+        );
+      }
+      report.template = {
+        source: sourceIdentity,
+        provenanceUrl: entry.provenance.url,
+        retrievedAt: entry.provenance.retrievedAt,
+        name: entry.name,
+      };
+      const client = new BotmancersHttpClient({ baseUrl: botmancersBaseUrl, maxRetries: 0 });
+      const handlers = createV1Handlers(new MarketService({
+        catalog,
+        evidence: evidence!,
+        source: () => adapter,
+        botmancers: client,
+        now,
+      }));
+      const evidenceResponse = await handlers.evidence({ params: params(sourceIdentity) });
+      if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
+      report.evidence = inspectEvidence(evidenceResponse.body as EvidenceLookup, sourceIdentity);
+      if (report.evidence.usesInstallCount || report.evidence.usesPrivateUsage) {
+        throw new AcceptanceFailure(
+          "label_uses_forbidden_metric",
+          `Adoption label used forbidden signals (installCount=${report.evidence.usesInstallCount}, privateUsage=${report.evidence.usesPrivateUsage})`,
+        );
+      }
+      const preview = await handlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
+      if (preview.status !== 200) responseError(preview, "preview_failed");
+      const applied = await previewAndApply({
+        handlers,
+        source: sourceIdentity,
+        uiBaseUrl,
+        replay: true,
+      });
+      report.compatibility = applied.compatibility;
+      report.approval = applied.approval;
+      report.target = applied.target;
     }
 
-    // Failure paths always use the captured fixture catalog so they stay network-free and deterministic.
     await reconcileFixtureCatalog(failureCatalogPath);
-    const failureCases = await runFailureCases({ catalogPath: failureCatalogPath, evidence, now });
-
-    const statuses = [
-      reconciliation.unexplainedOmissions.length === 0 ? "passed" as const : "failed" as const,
-      happy.evidence.usesInstallCount === false && happy.evidence.usesPrivateUsage === false ? "passed" as const : "failed" as const,
-      happy.target.verification.status === "passed" ? "passed" as const : "failed" as const,
-      ...failureCases.map((item) => item.status),
-    ];
-    const status = rollupStatus(statuses);
-    const report: V0AcceptanceReport = {
-      schemaVersion: "1.0.0",
-      suite: "v0-acceptance",
-      generatedAt: now(),
-      mode,
-      status,
-      exitCode: status === "passed" ? 0 : 1,
-      source,
-      reconciliation,
-      ...happy,
-      browser: {
-        status: "operator_required",
-        notes: "Record catalog → inspector → preview → apply → verify plus Botmancers return in a real browser; see docs/acceptance-v0.md ([operator]).",
-      },
-      failureCases,
-    };
-
-    if (options.reportPath) {
-      mkdirSync(dirname(options.reportPath), { recursive: true });
-      writeFileSync(options.reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    let failureEvidence = evidence!;
+    if (persistOperatorDbs) {
+      const seeded = await seedAcceptanceEvidence(join(work, "failure-evidence.sqlite"));
+      closeFailureEvidence = seeded.close;
+      failureEvidence = seeded.service;
     }
+    report.failureCases = await runFailureCases({
+      catalogPath: failureCatalogPath,
+      evidence: failureEvidence,
+      now,
+      source: CHOSEN_SOURCE,
+    });
+
+    const verifyPeer = options.verifyPeerRepos ?? process.env.CLONE_MARKET_ACCEPTANCE_PEER_REPOS === "1";
+    report.peerRepositories.botmancers = verifyPeer
+      ? verifyBotmancersPeerRepo(options.botmancersRoot ?? process.env.BOTMANCERS_ROOT)
+      : {
+        status: "skipped",
+        returnRouteConfirmed: false,
+        idempotencyKeyConfirmed: false,
+        detail: "Peer Botmancers verification is opt-in via CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 and BOTMANCERS_ROOT.",
+      };
+
+    const statuses: Array<"passed" | "failed"> = [
+      report.reconciliation.unexplainedOmissions.length === 0 ? "passed" : "failed",
+      report.evidence?.usesInstallCount === false && report.evidence?.usesPrivateUsage === false ? "passed" : "failed",
+      report.target?.verification.status === "passed" && report.target.replaySameBot === true ? "passed" : "failed",
+      ...report.failureCases.map((item) => item.status),
+    ];
+    if (verifyPeer && report.peerRepositories.botmancers.status === "failed") statuses.push("failed");
+    report.status = rollupStatus(statuses);
+    report.exitCode = report.status === "passed" ? 0 : 1;
+    writeReport();
+    return report;
+  } catch (reason) {
+    report.status = "failed";
+    report.exitCode = 1;
+    report.error = acceptanceError(reason);
+    writeReport();
     return report;
   } finally {
+    closeCatalog?.();
     closeEvidence?.();
+    closeFailureEvidence?.();
     rmSync(work, { recursive: true, force: true });
   }
 }
