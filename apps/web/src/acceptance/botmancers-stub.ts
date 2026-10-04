@@ -5,6 +5,8 @@ import {
   type BotmancersImportPayload,
 } from "@clone-market/target-botmancers";
 
+export { botmancersBotUrl as botmancersReturnUrl } from "../botmancers-url.js";
+
 export const ACCEPTANCE_CAPABILITIES: BotmancersCapabilities = {
   schemaVersion: "1.0.0",
   target: { provider: "botmancers", runtime: "cloud", version: "1" },
@@ -87,9 +89,4 @@ export class BotmancersAcceptanceStub {
   operationIds(): string[] {
     return this.calls.map((call) => call.operationId).filter((value): value is string => value !== undefined);
   }
-}
-
-export function botmancersReturnUrl(uiBaseUrl: string, botId: string): string {
-  const base = uiBaseUrl.endsWith("/") ? uiBaseUrl : `${uiBaseUrl}/`;
-  return new URL(`bots/${encodeURIComponent(botId)}`, base).toString();
 }

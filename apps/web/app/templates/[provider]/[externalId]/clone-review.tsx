@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { ApplyResult, VerifyResult } from "@clone-market/core";
+import { botmancersBotUrl } from "../../../../src/botmancers-url";
 import type { ReviewResponse } from "../../../../src/market";
 
 type SuccessfulApply = Extract<ApplyResult, { status: "succeeded" }>;
@@ -17,11 +18,6 @@ function requestError(reason: unknown): { code: string; message: string } {
     if (typeof value.code === "string" && typeof value.message === "string") return { code: value.code, message: value.message };
   }
   return { code: "request_failed", message: reason instanceof Error ? reason.message : "Request failed" };
-}
-
-function botmancersBotUrl(uiBaseUrl: string, botId: string): string {
-  const base = uiBaseUrl.endsWith("/") ? uiBaseUrl : `${uiBaseUrl}/`;
-  return new URL(`bots/${encodeURIComponent(botId)}`, base).toString();
 }
 
 export function CloneReview({ provider, externalId, botmancersUiBaseUrl }: { provider: string; externalId: string; botmancersUiBaseUrl: string }) {
