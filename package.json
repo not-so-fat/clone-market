@@ -7,6 +7,7 @@
     "node": ">=22.5"
   },
   "workspaces": [
+    "apps/*",
     "packages/*",
     "fixtures/*"
   ],
@@ -15,9 +16,11 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc -p apps/web/tsconfig.json --noEmit --pretty false",
+    "build:web": "npm run build --workspace=@clone-market/web",
     "test": "npm run build && vitest run",
-    "lint": "node scripts/check-boundaries.mjs && tsc -p tsconfig.lint.json --pretty false"
+    "lint": "node scripts/check-boundaries.mjs && node scripts/check-web-boundaries.mjs && tsc -p tsconfig.lint.json --pretty false",
+    "test:web": "vitest run apps/web"
   },
   "devDependencies": {
     "@types/node": "20.19.11",

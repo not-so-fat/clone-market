@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { AdoptionSnapshotSchema, SCHEMA_VERSION, type EvidenceType } from "@clone-market/core";
+import { AdoptionSnapshotSchema, SCHEMA_VERSION, type AdoptionSnapshot, type EvidenceType } from "@clone-market/core";
 
 import type { AdoptionDerivation, RuleContribution, StoredEvidence } from "./types.js";
 
@@ -23,6 +23,21 @@ const RELATIONSHIP_PRIORITY: Record<StoredEvidence["creatorRelationship"], numbe
   independent: 3,
 };
 const VELOCITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+export const DEFAULT_EVIDENCE_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+
+export type EvidenceFreshness = "fresh" | "stale" | "missing";
+
+/** Classifies the freshness of the latest public-evidence snapshot. */
+export function classifyEvidenceFreshness(
+  snapshot: AdoptionSnapshot | undefined,
+  now: string,
+  staleAfterMs = DEFAULT_EVIDENCE_STALE_AFTER_MS,
+): EvidenceFreshness {
+  if (snapshot === undefined) return "missing";
+  return timestamp(now, "now") - timestamp(snapshot.evidenceThrough, "evidenceThrough") > staleAfterMs
+    ? "stale"
+    : "fresh";
+}
 
 export type ClassifierOptions = {
   calculatedAt: string;
