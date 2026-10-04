@@ -6,9 +6,15 @@ export type WebConfig = {
   evidenceDatabase: string;
   artifactDirectory: string;
   grokBaseUrl: string;
-  botmancersBaseUrl: string;
-  botmancersUiBaseUrl: string;
+  botmancersBaseUrl?: string;
+  botmancersUiBaseUrl?: string;
 };
+
+function optionalUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
 
 /** Walk from cwd (or CLONE_MARKET_ROOT) to the workspace package.json named clone-market. */
 export function findCloneMarketRoot(start = process.cwd()): string {
@@ -42,12 +48,14 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env): WebCon
   const root = environment.CLONE_MARKET_ROOT !== undefined && environment.CLONE_MARKET_ROOT.length > 0
     ? resolve(environment.CLONE_MARKET_ROOT)
     : findCloneMarketRoot();
+  const botmancersBaseUrl = optionalUrl(environment.CLONE_MARKET_BOTMANCERS_BASE_URL);
+  const botmancersUiBaseUrl = optionalUrl(environment.CLONE_MARKET_BOTMANCERS_UI_BASE_URL);
   return {
     catalogDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_CATALOG_DB ?? "./data/catalog.sqlite", root),
     evidenceDatabase: resolveCloneMarketDataPath(environment.CLONE_MARKET_EVIDENCE_DB ?? "./data/evidence.sqlite", root),
     artifactDirectory: resolveCloneMarketDataPath(environment.CLONE_MARKET_ARTIFACT_DIR ?? "./data/artifacts", root),
     grokBaseUrl: environment.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/",
-    botmancersBaseUrl: environment.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/",
-    botmancersUiBaseUrl: environment.CLONE_MARKET_BOTMANCERS_UI_BASE_URL ?? "http://127.0.0.1:3100/",
+    ...(botmancersBaseUrl === undefined ? {} : { botmancersBaseUrl }),
+    ...(botmancersUiBaseUrl === undefined ? {} : { botmancersUiBaseUrl }),
   };
 }

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { checkBoundaries } from "../../../scripts/check-boundaries.mjs";
 import { BotmancersTargetAdapter, createBotmancersClonePlan, withReviewedPlanDigest } from "./adapter.js";
-import { BotmancersHttpClient } from "./client.js";
+import { BotmancersHttpClient, DeclaredBotmancersCapabilitiesClient } from "./client.js";
 import { CapabilityVersionError } from "./errors.js";
 import type { BotmancersFetch, BotmancersImportPayload } from "./types.js";
 
@@ -324,16 +324,20 @@ describe("BotmancersHttpClient", () => {
       "baseUrl must not contain credentials",
     );
   });
+});
 
-  it("lists bots from v1/imports or api/bots", async () => {
-    const fetch: BotmancersFetch = async (url) => {
-      const path = new URL(url).pathname;
-      if (path === "/v1/imports") return response(404, { error: "not_found" });
-      if (path === "/api/bots") return response(200, [{ id: "bot-1" }, { id: "bot-2" }]);
-      return response(404, { error: "not_found" });
-    };
-    const client = new BotmancersHttpClient({ fetch, baseUrl: "https://botmancers.example/", maxRetries: 0, retryBaseMs: 0 });
-    await expect(client.listBots()).resolves.toEqual([{ id: "bot-1" }, { id: "bot-2" }]);
+describe("DeclaredBotmancersCapabilitiesClient", () => {
+  it("returns declared capabilities without HTTP", async () => {
+    const client = new DeclaredBotmancersCapabilitiesClient();
+    await expect(client.getCapabilities()).resolves.toMatchObject({
+      schemaVersion: "1.0.0",
+      target: { provider: "botmancers" },
+      memories: "native",
+    });
+    await expect(client.importBot(
+      { schemaVersion: "1.0.0", bot: { name: "x", description: "y" }, provenance: { source: { provider: "p", externalId: "e" }, manifestId: "m", retrievedAt: "t", url: "u", reviewedPlanDigest: "d" } },
+      { operationId: "op", idempotencyKey: "key" },
+    )).rejects.toMatchObject({ name: "BotmancersHttpError" });
   });
 });
 

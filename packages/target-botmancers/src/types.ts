@@ -5,6 +5,20 @@ export const BOTMANCERS_IMPORT_SCHEMA_VERSION = "1.0.0" as const;
 
 export type BotmancersCapabilities = TargetCapabilities;
 
+/** Declared V0 Botmancers capability surface used when no import API is configured. */
+export const DECLARED_BOTMANCERS_CAPABILITIES: BotmancersCapabilities = {
+  schemaVersion: "1.0.0",
+  target: { provider: "botmancers", runtime: "cloud", version: "1" },
+  instructionForms: { exact: ["plain_text"], compatible: [] },
+  memories: "native",
+  skills: "unsupported",
+  routines: "unsupported",
+  integrations: [],
+  credentials: [],
+  executionModes: ["manual"],
+  safety: { disallowedExecutionBehaviors: ["shell"] },
+};
+
 export interface BotmancersImportPayload {
   readonly schemaVersion: typeof BOTMANCERS_IMPORT_SCHEMA_VERSION;
   readonly bot: {

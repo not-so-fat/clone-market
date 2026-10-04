@@ -7,15 +7,12 @@ import type { ClonePolicy } from "@clone-market/compatibility";
 import type { SourceAdapter, SourceIdentity } from "@clone-market/core";
 import { EvidenceService, SqliteEvidenceRepository } from "@clone-market/evidence";
 import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
+import { DeclaredBotmancersCapabilitiesClient, DECLARED_BOTMANCERS_CAPABILITIES } from "@clone-market/target-botmancers";
 
 import { FileArtifactSink, MemoryArtifactSink, type ArtifactSink } from "../artifact-sink.js";
 import { resolveCloneMarketDataPath } from "../config.js";
 import { createV1Handlers } from "../http.js";
 import { MarketService, type CatalogItem } from "../market.js";
-import {
-  ACCEPTANCE_CAPABILITIES,
-  BotmancersAcceptanceStub,
-} from "./botmancers-stub.js";
 import { AcceptanceFailure, acceptanceError } from "./error.js";
 import {
   ACCEPTANCE_NOW,
@@ -193,7 +190,7 @@ function exportMarket(input: {
   catalog: SqliteCatalogRepository;
   evidence: EvidenceService;
   adapter: SourceAdapter;
-  stub: BotmancersAcceptanceStub;
+  botmancers?: DeclaredBotmancersCapabilitiesClient;
   artifacts: ArtifactSink;
   now: () => string;
 }) {
@@ -201,7 +198,7 @@ function exportMarket(input: {
     catalog: input.catalog,
     evidence: input.evidence,
     source: () => input.adapter,
-    botmancers: input.stub.client(),
+    botmancers: input.botmancers ?? new DeclaredBotmancersCapabilitiesClient(),
     artifacts: input.artifacts,
     now: input.now,
   });
@@ -217,35 +214,32 @@ async function runFailureCases(input: {
   const identity = params(input.source);
 
   {
-    const stub = new BotmancersAcceptanceStub();
+    const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("detail_drift");
     const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
       adapter,
-      stub,
-      artifacts: new MemoryArtifactSink(),
+      artifacts,
       now: input.now,
     }));
     const response = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const code = (response.body as { error?: { code?: string } }).error?.code;
-    const posts = stub.calls.filter((call) => call.method === "POST").length;
     cases.push({
       id: "source_schema_drift",
-      status: response.status === 503 && code === "source_drift" && posts === 0 ? "passed" : "failed",
+      status: response.status === 503 && code === "source_drift" && artifacts.store.size === 0 ? "passed" : "failed",
       expectedCode: "source_drift",
       httpStatus: response.status,
       mutating: false,
-      detail: posts === 0
+      detail: artifacts.store.size === 0
         ? `Typed source_drift response with status ${response.status}; no artifact written`
-        : `Unexpected Botmancers POST count ${posts}`,
+        : `Unexpected artifact count ${artifacts.store.size}`,
     });
     catalog.close();
   }
 
   {
-    const stub = new BotmancersAcceptanceStub();
     const artifacts = new MemoryArtifactSink();
     artifacts.unavailable = true;
     const catalog = new SqliteCatalogRepository(input.catalogPath);
@@ -254,7 +248,6 @@ async function runFailureCases(input: {
       catalog,
       evidence: input.evidence,
       adapter,
-      stub,
       artifacts,
       now: input.now,
     }));
@@ -282,22 +275,22 @@ async function runFailureCases(input: {
   }
 
   {
-    const stub = new BotmancersAcceptanceStub();
     const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
+    const botmancers = new DeclaredBotmancersCapabilitiesClient();
     const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
       adapter,
-      stub,
+      botmancers,
       artifacts,
       now: input.now,
     }));
     const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const previewBody = preview.body as { plan: { id: string; createdAt: string } };
-    stub.capabilities = {
-      ...ACCEPTANCE_CAPABILITIES,
+    botmancers.capabilities = {
+      ...DECLARED_BOTMANCERS_CAPABILITIES,
       memories: "unsupported",
     };
     const exported = await handlers.exportArtifact({
@@ -322,7 +315,6 @@ async function runFailureCases(input: {
   }
 
   {
-    const stub = new BotmancersAcceptanceStub();
     const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
@@ -330,7 +322,6 @@ async function runFailureCases(input: {
       catalog,
       evidence: input.evidence,
       adapter,
-      stub,
       artifacts,
       now: input.now,
     }));
@@ -369,7 +360,6 @@ async function runFailureCases(input: {
   }
 
   {
-    const stub = new BotmancersAcceptanceStub();
     const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
@@ -377,7 +367,6 @@ async function runFailureCases(input: {
       catalog,
       evidence: input.evidence,
       adapter,
-      stub,
       artifacts,
       now: input.now,
     }));
@@ -566,7 +555,6 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
 
     mkdirSync(artifactDir, { recursive: true });
     const artifacts = new FileArtifactSink(artifactDir);
-    const capabilityStub = new BotmancersAcceptanceStub();
 
     if (mode === "fixture") {
       const reconciliationReport = await reconcileFixtureCatalog(catalogPath!);
@@ -593,7 +581,6 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         catalog: catalogRepo,
         evidence,
         adapter,
-        stub: capabilityStub,
         artifacts,
         now,
       }));
@@ -604,7 +591,6 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       report.evidence = await inspectDisplayedLabels(handlers, catalogBody.items, sourceIdentity);
       const previewCheck = await handlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
       if (previewCheck.status !== 200) responseError(previewCheck, "preview_failed");
-      if (capabilityStub.botCount() !== 0) throw new AcceptanceFailure("preview_mutated_target", "Preview mutated Botmancers");
       const exported = await previewAndExport({
         handlers,
         source: sourceIdentity,
@@ -663,7 +649,6 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         catalog,
         evidence: evidence!,
         adapter,
-        stub: capabilityStub,
         artifacts,
         now,
       }));

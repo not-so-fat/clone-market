@@ -21,8 +21,17 @@ describe("web data path resolution [agent]", () => {
     expect(config.artifactDirectory).toBe(join(root, "data/artifacts"));
   });
 
-  it("defaults the Botmancers API to a local URL so copied env files do not target production", () => {
-    expect(readConfig({ CLONE_MARKET_ROOT: findCloneMarketRoot() }).botmancersBaseUrl).toBe("http://127.0.0.1:8787/");
+  it("does not default a Botmancers API URL; unset means declared capabilities", () => {
+    const config = readConfig({ CLONE_MARKET_ROOT: findCloneMarketRoot() });
+    expect(config.botmancersBaseUrl).toBeUndefined();
+    expect(config.botmancersUiBaseUrl).toBeUndefined();
+  });
+
+  it("keeps an explicit Botmancers API URL when the operator sets one", () => {
+    expect(readConfig({
+      CLONE_MARKET_ROOT: findCloneMarketRoot(),
+      CLONE_MARKET_BOTMANCERS_BASE_URL: "http://127.0.0.1:43123/",
+    }).botmancersBaseUrl).toBe("http://127.0.0.1:43123/");
   });
 
   it("keeps operator absolute paths unchanged", () => {

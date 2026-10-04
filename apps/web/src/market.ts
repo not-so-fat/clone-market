@@ -7,7 +7,7 @@ import {
   PlanApprovalError,
   createBotmancersClonePlan,
   withReviewedPlanDigest,
-  type BotmancersHttpClient,
+  type BotmancersClient,
 } from "@clone-market/target-botmancers";
 
 import {
@@ -61,7 +61,7 @@ type Dependencies = {
   catalog: CatalogRepository;
   evidence: Pick<EvidenceService, "getLatest">;
   source(source: string): SourceAdapter;
-  botmancers: BotmancersHttpClient;
+  botmancers: BotmancersClient;
   artifacts?: ArtifactSink;
   now?: () => string;
   manifestFilterConcurrency?: number;

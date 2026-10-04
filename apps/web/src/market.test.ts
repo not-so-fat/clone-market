@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AdoptionSnapshot, BotTemplateManifest, CatalogEntry, CatalogRepository, SourceAdapter } from "@clone-market/core";
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import { EvidenceService, SqliteEvidenceRepository, type AdoptionEvidenceQuery, type StoredEvidence } from "@clone-market/evidence";
-import { BotmancersHttpClient } from "@clone-market/target-botmancers";
+import { BotmancersHttpClient, DeclaredBotmancersCapabilitiesClient } from "@clone-market/target-botmancers";
 import { MemoryArtifactSink } from "./artifact-sink.js";
 import { MarketService, type ReviewResponse } from "./market.js";
 import { createV1Handlers } from "./http.js";
@@ -86,12 +86,12 @@ function client(state: ClientState) {
   } });
 }
 
-function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string; manifestFilterConcurrency?: number; artifacts?: MemoryArtifactSink } = {}) {
+function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string; manifestFilterConcurrency?: number; artifacts?: MemoryArtifactSink; botmancers?: ReturnType<typeof client> | DeclaredBotmancersCapabilitiesClient } = {}) {
   const repo = options.repo ?? repository();
   const sourceAdapter = options.sourceAdapter ?? adapter();
   const state = options.state ?? { posts: 0 };
   const artifacts = options.artifacts ?? new MemoryArtifactSink();
-  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), artifacts, now: options.now ?? (() => NOW), manifestFilterConcurrency: options.manifestFilterConcurrency });
+  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: options.botmancers ?? client(state), artifacts, now: options.now ?? (() => NOW), manifestFilterConcurrency: options.manifestFilterConcurrency });
   return { market, repo, sourceAdapter, state, artifacts };
 }
 
@@ -423,5 +423,22 @@ describe("reviewed clone routes", () => {
     expect(tampered.status).toBe(200);
     expect(tampered.body).toMatchObject({ status: "failed" });
     expect(JSON.stringify(tampered.body)).toContain("artifact-digest");
+  });
+
+  it("previews and exports with declared capabilities and no Botmancers HTTP", async () => {
+    const artifacts = new MemoryArtifactSink();
+    const context = service({ artifacts, botmancers: new DeclaredBotmancersCapabilitiesClient() });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    expect(preview.status).toBe(200);
+    const review = preview.body as ReviewResponse;
+    const exported = await handlers.exportArtifact({
+      params,
+      body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true },
+    });
+    expect(exported.status).toBe(200);
+    expect((exported.body as { verification: { status: string } }).verification.status).toBe("passed");
+    expect(context.state.posts).toBe(0);
   });
 });
