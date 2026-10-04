@@ -1,0 +1,27 @@
+{
+  "name": "@clone-market/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "cloneMarket": { "layer": "product" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "test": "vitest run --root ../.. apps/web"
+  },
+  "dependencies": {
+    "@clone-market/catalog": "0.1.0",
+    "@clone-market/compatibility": "0.1.0",
+    "@clone-market/core": "0.1.0",
+    "@clone-market/evidence": "0.1.0",
+    "@clone-market/source-grok": "0.1.0",
+    "@clone-market/target-botmancers": "0.1.0",
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9"
+  }
+}
