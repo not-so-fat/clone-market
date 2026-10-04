@@ -12,7 +12,7 @@ Clone Market helps an agent user discover useful public agent templates, see the
 
 ## User story
 
-As an agent user exploring the Grok Bot Marketplace, I want to compare every available public template and clone one into Botmancer, Agent Deck, or a coding agent so that I can reuse a proven workflow without manually reverse-engineering its configuration.
+As an agent user exploring the Grok Bot Marketplace, I want to compare every available public template and prepare a private, target-compatible import for Botmancer, Agent Deck, or a coding agent so that I can reuse a proven workflow without manually reverse-engineering its configuration.
 
 Acceptance:
 
@@ -75,10 +75,10 @@ Show:
 3. The importer normalizes the source into a versioned `BotTemplateManifest`.
 4. The compatibility layer classifies each component as exact, compatible, partial, unavailable, or unsafe.
 5. The user reviews the plan and approves generation.
-6. A target adapter creates a private Botmancer agent, Agent Deck playbook, or coding-agent skill.
-7. The user runs a safe verification task before activation.
+6. A target adapter writes a versioned private import artifact through a caller-provided output sink.
+7. Clone Market verifies the artifact before any consumer applies or activates it.
 
-Botmancer's user-facing entry point should be **Import from Grok Marketplace**. Botmancer consumes Clone Market's manifest and import primitives; it does not own them.
+A future Botmancer integration may expose **Import from Grok Marketplace** and consume the verified artifact. That consumer UI and its persistence API belong to the Botmancer repository and do not block Clone Market V0.
 
 ## Complete coverage, progressive enrichment
 
@@ -150,7 +150,7 @@ The ingestion and import primitives are reusable product infrastructure. Clone M
 2. **Source adapters** implement a common interface for listing templates, fetching one current public template, and normalizing it into core contracts. Grok-specific parsing and schema-drift detection stay inside the Grok adapter.
 3. **Catalog and evidence services** persist allowed metadata, source snapshots, evidence rows, and derived adoption labels through repository interfaces rather than source-specific storage calls.
 4. **Compatibility planning** compares a manifest with declared target capabilities and returns a reviewable clone plan. It does not generate target files or execute imported instructions.
-5. **Target adapters** preview, apply, and verify a clone plan for Botmancer, Agent Deck, or a coding agent. Target-specific generation never leaks into the manifest or source adapter.
+5. **Target adapters** preview a clone plan, apply it to a caller-provided artifact sink, and verify the resulting artifact for Botmancer, Agent Deck, or a coding agent. They do not require the consumer product to be installed or reachable. Target-specific generation never leaks into the manifest or source adapter.
 6. **Product surfaces** compose these APIs. They may add transport layers such as CLI, HTTP, or UI, but reusable modules remain transport-neutral and callable independently.
 
 Dependency direction is one way: product surfaces depend on target adapters and services; target adapters and services depend on core contracts; source adapters depend on core contracts. Source adapters and target adapters never depend on each other.
@@ -165,9 +165,9 @@ V0 proves the end-to-end contract, not merely scraping:
 2. Fetch and normalize any public template detail page on demand.
 3. Detect source-schema drift and fail visibly.
 4. Display Featured placement and evidence-backed adoption labels without claiming private usage.
-5. Produce a private Botmancer import preview for one template.
+5. Produce a private Botmancer-compatible import preview and versioned artifact for one template.
 6. Identify missing integrations, memories, routines, and target-runtime behavior.
-7. Run one safe post-import verification task.
+7. Verify the generated artifact without executing imported instructions or requiring the Botmancer product.
 
 ## Negative space
 
@@ -178,7 +178,7 @@ V0 will not:
 - publish derived clones without creator permission;
 - execute imported instructions before review;
 - promise identical behavior across different models, tools, credentials, memories, or runtimes; or
-- support every target runtime before the normalized manifest and first Botmancer path are proven.
+- support every target runtime before the normalized manifest and first target-artifact path are proven.
 
 ## Open decisions
 
@@ -187,7 +187,7 @@ V0 will not:
 | Which source fields may be stored centrally? | Store source-linked catalog metadata; fetch full configuration only for a private, user-initiated import. | Terms and legal review of the proposed schema. |
 | Manual research or X API for adoption evidence? | Begin with manually reviewed exact-link/name searches and preserve evidence rows. | Review precision, coverage, and cost after the first 100 evidence rows. |
 | Source-specific or format-first package boundary? | Implement a versioned manifest plus a Grok adapter, even if they initially share one repository. | A second source adapter or first incompatible Grok schema change forces the seam. |
-| First clone target? | Botmancer first; keep target output behind an adapter. | One successful end-to-end private clone and verification task. |
+| First clone target? | A Botmancer-compatible artifact first; keep consumer application behind a separate integration boundary. | One successful preview, artifact export, and offline verification; live Botmancer integration is tracked separately. |
 
 ## Success measures
 
