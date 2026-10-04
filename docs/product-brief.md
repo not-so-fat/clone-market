@@ -1,14 +1,14 @@
 # Clone Market product brief
 
-**Status:** V0 implementation assembled; offline acceptance harness proven (fixture catalog, reviewed-evidence labels, stub apply/verify, injected failures); live operator proof pending
+**Status:** V0 implementation assembled; offline acceptance harness proven (fixture catalog, reviewed-evidence labels, preview → export → offline artifact verify, injected failures); live operator proof pending
 
 **Updated:** 2026-10-04
 
 **Decision:** Build a complete, source-linked index of public Grok Bot templates, progressively enrich every template with public adoption evidence, and support private compatibility-aware imports without republishing creators' configurations.
 
-**Proven offline (fixture / stub):** complete captured Marketplace reconciliation without a hard-coded catalog cap; evidence-backed adoption labels with inspectable contributions and guards that fail if any displayed label uses `installCount` or private usage; reviewed Botmancers preview → explicit approval → apply → read-after-write verification; replay of the same target operation id against the stub with a Botmancers list-bot count; typed non-mutating failures for source drift, Botmancers unavailability at preview and apply, and changed plan digests. Live mode does not seed fixture evidence; it requires `CLONE_MARKET_EVIDENCE_DB` (import reviewed rows, then derive or let the harness derive), retains `CLONE_MARKET_CATALOG_DB` for the UI, and resolves relative DB paths against the repository root. See `docs/acceptance-v0.md` and `npm run smoke:v0`.
+**Proven offline (fixture / declared capabilities):** complete captured Marketplace reconciliation without a hard-coded catalog cap; evidence-backed adoption labels with inspectable contributions and guards that fail if any displayed label uses `installCount` or private usage; reviewed Botmancers preview → explicit approval → private artifact export → offline file verification; replay of the same artifact identity and digest against an idempotent sink; typed non-mutating failures for source drift, unavailable artifact sink, changed plan digests, and tampered artifacts. Live mode does not seed fixture evidence; it requires `CLONE_MARKET_EVIDENCE_DB` (import reviewed rows, then derive or let the harness derive), retains `CLONE_MARKET_CATALOG_DB` for the UI, and resolves relative DB paths against the repository root. See `docs/acceptance-v0.md` and `npm run smoke:v0`.
 
-**Still operator / external:** live Marketplace traversal against today’s public HTML/RSC surface; browser recording of catalog → inspector → preview → apply → verify plus Botmancers return; continuous freshness of public evidence rows.
+**Still operator / external:** live Marketplace traversal against today’s public HTML/RSC surface; browser recording of catalog → inspector → preview → export → offline verify; continuous freshness of public evidence rows. Applying a verified artifact inside Botmancers is tracked separately.
 
 ## Value
 
@@ -202,7 +202,7 @@ V0 will not:
 | Which source fields may be stored centrally? | Store source-linked catalog metadata; fetch full configuration only for a private, user-initiated import. | Terms and legal review of the proposed schema. |
 | Manual research or X API for adoption evidence? | Begin with manually reviewed exact-link/name searches and preserve evidence rows. | Review precision, coverage, and cost after the first 100 evidence rows. |
 | Source-specific or format-first package boundary? | Implement a versioned manifest plus a Grok adapter, even if they initially share one repository. | A second source adapter or first incompatible Grok schema change forces the seam. |
-| First clone target? | A Botmancers-compatible artifact and local import path first; keep broader consumer hosting behind a separate boundary. | Offline V0 acceptance green; live operator proof recorded per `docs/acceptance-v0.md`. |
+| First clone target? | A privately exported Botmancers-compatible artifact first; applying it inside Botmancers is tracked separately. Keep broader consumer hosting behind a separate boundary. | Offline V0 acceptance green; live operator proof recorded per `docs/acceptance-v0.md`. |
 
 ## Success measures
 

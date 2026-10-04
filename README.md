@@ -20,7 +20,7 @@ Clone Market uses Node.js 22.5 or newer (for the built-in SQLite API), TypeScrip
 | `npm test` | Run contract, public-consumer, package-boundary, and offline V0 acceptance tests (network-free). |
 | `npm run lint` | Check package boundaries and TypeScript source hygiene. |
 | `npm run smoke:v0` | Opt-in offline V0 acceptance harness; writes a machine-readable report under `.temporal/logs/`. |
-| `npm run smoke:v0:live` | **[operator]** Live Marketplace + local Botmancers acceptance; requires `CLONE_MARKET_ACCEPTANCE_LIVE=1`. Relative DB paths resolve against the repo root. |
+| `npm run smoke:v0:live` | **[operator]** Live Marketplace + local artifact export; requires `CLONE_MARKET_ACCEPTANCE_LIVE=1`. Relative DB paths resolve against the repo root. |
 | `npm run evidence:derive` | Write an adoption snapshot into `CLONE_MARKET_EVIDENCE_DB` from reviewed rows (`--database` `--template-id`). |
 
 The reusable contracts live in `@clone-market/core`. Product surfaces, source,
@@ -38,15 +38,17 @@ index catalog, reviewed public-evidence labels, the Botmancers target adapter,
 and the Clone Market web surface are implemented. Offline V0 acceptance
 (`npm run smoke:v0`) proves complete fixture-catalog reconciliation, evidence-backed
 labels whose contributions are checked for `installCount` and private-usage signals,
-preview → approve → apply → verify against an in-process Botmancers stub, replay of
-the same operation id, and typed non-mutating failure paths (including Botmancers
-unavailable at apply). Live smoke reads `CLONE_MARKET_EVIDENCE_DB` (and derives missing snapshots) and writes
+preview → approve → export → offline artifact verify against a file/memory sink
+(declared Botmancers capabilities; no Botmancers HTTP), replay of the same artifact
+identity and digest, and typed non-mutating failure paths (source drift, unavailable
+artifact sink, changed plan digest, tampered artifact, idempotent retry). Live smoke
+reads `CLONE_MARKET_EVIDENCE_DB` (and derives missing snapshots) and writes
 `CLONE_MARKET_CATALOG_DB` for the web UI; relative paths resolve to the repository root
 so they match `next dev`. Live mode is **[operator]**-only.
 
-Live end-to-end proof against the current public Marketplace and a local Botmancers
-instance remains an **[operator]** run (`docs/acceptance-v0.md`). Browser recordings
-and UI captures are operator evidence, not part of the default offline suite.
+Live end-to-end proof against the current public Marketplace remains an **[operator]**
+run (`docs/acceptance-v0.md`). A local Botmancers process is not required. Browser
+recordings and UI captures are operator evidence, not part of the default offline suite.
 
 ### Remaining unsupported / uncertain
 

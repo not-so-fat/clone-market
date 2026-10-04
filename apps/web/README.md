@@ -10,7 +10,7 @@ Copy `.env.example` and configure:
 - `CLONE_MARKET_EVIDENCE_DB`: public evidence SQLite database.
 - `CLONE_MARKET_ARTIFACT_DIR`: directory for reviewed private Botmancers-compatible artifacts (default `./data/artifacts`).
 - `CLONE_MARKET_GROK_BASE_URL`: Grok Marketplace source endpoint.
-- `CLONE_MARKET_BOTMANCERS_BASE_URL`: optional local Botmancers API (not required for V0 export/verify; default `http://127.0.0.1:8787/`).
+- `CLONE_MARKET_BOTMANCERS_BASE_URL`: optional Botmancers import API. Leave unset for V0 preview/export/offline verify (declared capabilities; no HTTP).
 - `CLONE_MARKET_BOTMANCERS_UI_BASE_URL`: unused in V0 (Botmancers has no proven `bots/<id>` return page).
 
 The central databases contain catalog metadata and public evidence only. Full source manifests are fetched on demand for each detail, preview, apply, or verification request. They are not written to SQLite, cookies, local storage, or session storage.
@@ -32,7 +32,7 @@ Preview is side-effect free. Export requires `approved: true`, `planDigest`, and
 
 Machine-readable offline acceptance lives in `src/acceptance/` and is documented in [`docs/acceptance-v0.md`](../../docs/acceptance-v0.md).
 
-- **[agent]** `npm run smoke:v0` from the repository root (network-free fixture + stub).
+- **[agent]** `npm run smoke:v0` from the repository root (network-free fixture + declared capabilities).
 - **[operator]** `npm run smoke:v0:live` with `CLONE_MARKET_ACCEPTANCE_LIVE=1` (set by the script). Relative `CLONE_MARKET_CATALOG_DB` / `CLONE_MARKET_EVIDENCE_DB` / `CLONE_MARKET_ARTIFACT_DIR` paths resolve to the repository root so they match `next dev`. Import reviewed evidence, then `npm run evidence:derive` (or let live smoke derive missing snapshots). The catalog DB and artifact directory are retained for `next dev`.
 
 ## Operator browser checklist **[operator]**
