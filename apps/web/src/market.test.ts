@@ -67,12 +67,12 @@ function evidence(label: AdoptionSnapshot["label"]): AdoptionEvidenceQuery {
   return { snapshot: snapshot(label), countedEvidenceIds: [row.id], contributions: [{ rule: "reviewed_evidence", passed: true, count: 1, threshold: 1, evidenceIds: [row.id], explanation: "Exact contributing row." }], evidence: [row] };
 }
 
-type ClientState = { posts: number; payload?: unknown; fail?: boolean; failImports?: boolean; idempotencyKeys?: string[] };
+type ClientState = { posts: number; payload?: unknown; fail?: boolean; failImports?: boolean; failReads?: boolean; idempotencyKeys?: string[]; capabilityResponses?: unknown[] };
 
 function client(state: ClientState) {
   return new BotmancersHttpClient({ maxRetries: 0, fetch: async (url, init) => {
     if (state.fail) throw new Error("target offline");
-    if (url.endsWith("/v1/capabilities")) return { ok: true, status: 200, async json() { return capabilities; } };
+    if (url.endsWith("/v1/capabilities")) return { ok: true, status: 200, async json() { return state.capabilityResponses?.shift() ?? capabilities; } };
     if (init.method === "POST") {
       if (state.failImports) throw new Error("target import failed");
       state.posts += 1;
@@ -80,15 +80,16 @@ function client(state: ClientState) {
       state.payload = JSON.parse(init.body ?? "null");
       return { ok: true, status: 200, async json() { return { id: "bot-1" }; } };
     }
+    if (state.failReads) throw new Error("target read failed");
     return { ok: true, status: 200, async json() { return { id: "bot-1", payload: state.payload }; } };
   } });
 }
 
-function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string } = {}) {
+function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string; manifestFilterConcurrency?: number } = {}) {
   const repo = options.repo ?? repository();
   const sourceAdapter = options.sourceAdapter ?? adapter();
   const state = options.state ?? { posts: 0 };
-  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), now: options.now ?? (() => NOW) });
+  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), now: options.now ?? (() => NOW), manifestFilterConcurrency: options.manifestFilterConcurrency });
   return { market, repo, sourceAdapter, state };
 }
 
@@ -123,6 +124,31 @@ describe("catalog and inspector", () => {
     const result = await market.catalog({ capability: "instructions" });
     expect(result.items.map(({ id }) => id)).toEqual([entry.id]);
     expect(result.filterWarnings).toEqual([{ source: second.provenance.source, code: "source_drift", message: "detail schema changed" }]);
+  });
+
+  it("bounds concurrent live manifest requests for capability filters", async () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ ...entry, id: `template-${index}`, provenance: { ...entry.provenance, source: { ...source, externalId: `template-${index}` } } }));
+    let active = 0;
+    let maximum = 0;
+    const sourceAdapter = adapter({
+      async fetchTemplate(identity) {
+        active += 1;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        active -= 1;
+        return { identity };
+      },
+    });
+    const { market } = service({ repo: repository(items), sourceAdapter, manifestFilterConcurrency: 3 });
+    expect((await market.catalog({ capability: "instructions" })).items).toHaveLength(items.length);
+    expect(maximum).toBe(3);
+  });
+
+  it("maps a catalog database failure during manifest lookup precisely", async () => {
+    const repo = repository();
+    repo.getTemplate = async () => { throw new Error("catalog locked"); };
+    const response = await createV1Handlers(service({ repo }).market).detail({ params: { provider: source.provider, externalId: source.externalId } });
+    expect(response).toMatchObject({ status: 503, body: { error: { code: "stored_data_unavailable", message: "catalog locked" } } });
   });
 
   it("serves stored evidence without fetching the live Grok manifest", async () => {
@@ -205,9 +231,59 @@ describe("reviewed clone routes", () => {
     const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt, approved: true } });
     expect(applied.status).toBe(200);
     expect(context.state.posts).toBe(1);
+    expect(applied.body).toMatchObject({ verification: { status: "passed", targetReference: "bot-1" } });
     const verified = await handlers.verify({ params, body: { policy, planDigest: review.plan.id, reviewedAt, targetReference: "bot-1" } });
     expect(verified.status).toBe(200);
     expect((verified.body as { status: string }).status).toBe("passed");
+  });
+
+  it("maps target plan rejection separately from target availability", async () => {
+    const changedCapabilities = { ...capabilities, target: { ...capabilities.target, version: "2" } };
+    const context = service({ state: { posts: 0, capabilityResponses: [capabilities, changedCapabilities] } });
+    const response = await createV1Handlers(context.market).preview({ params: { provider: source.provider, externalId: source.externalId }, body: { policy } });
+    expect(response).toMatchObject({ status: 503, body: { error: { code: "unsafe_plan", recoverable: true } } });
+    expect(context.state.posts).toBe(0);
+  });
+
+  it("verifies in the apply request so later source drift cannot invite a duplicate clone", async () => {
+    let drifted = false;
+    const sourceAdapter = adapter({
+      async normalizeTemplate(input, retrievedAt) {
+        if (drifted) throw new Error("source changed after import");
+        return adapter().normalizeTemplate(input, retrievedAt);
+      },
+    });
+    const context = service({ sourceAdapter });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    const body = { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true };
+    const applied = await handlers.apply({ params, body });
+    expect(applied).toMatchObject({ status: 200, body: { verification: { status: "passed" } } });
+    drifted = true;
+    const laterVerification = await handlers.verify({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, targetReference: "bot-1" } });
+    expect(laterVerification).toMatchObject({ status: 503, body: { error: { code: "source_drift" } } });
+    expect(context.state.posts).toBe(1);
+  });
+
+  it("returns a created clone with a verification-only error instead of inviting re-apply", async () => {
+    const state: ClientState = { posts: 0 };
+    const context = service({ state });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    state.failReads = true;
+    const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } });
+    expect(applied).toMatchObject({
+      status: 200,
+      body: {
+        result: { status: "succeeded", targetReference: "bot-1" },
+        verificationError: { code: "target_unavailable", recoverable: true },
+      },
+    });
+    expect(state.posts).toBe(1);
   });
 
   it("keeps an unchanged reviewed digest applicable across later server clock ticks", async () => {

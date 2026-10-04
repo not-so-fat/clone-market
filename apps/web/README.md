@@ -22,17 +22,16 @@ The central databases contain catalog metadata and public evidence only. Full so
 - `POST /api/v1/templates/:provider/:externalId/clone/apply`
 - `POST /api/v1/templates/:provider/:externalId/clone/verify`
 
-Preview is side-effect free. Apply requires `approved: true`, `planDigest`, and `reviewedAt` (the displayed plan's `createdAt`). Verification requires the same review identity plus `targetReference`. The server refetches and replans against that review identity before apply or verification; any source or target drift returns `stale_plan` and requires another review.
+Preview is side-effect free. Apply requires `approved: true`, `planDigest`, and `reviewedAt` (the displayed plan's `createdAt`). A successful apply verifies the created clone in the same request and returns either the verification result or a verification-only error; the UI never invites a second apply after creation. The standalone verification route requires the same review identity plus `targetReference` and remains available while that reviewed source is current. The server refetches and replans before apply, and changed source or target inputs force another review before any import.
 
 ## Operator checklist
 
-The fixture-backed smoke is recorded under [`artifacts/not-351`](./artifacts/not-351). `browser-smoke.json` records the successful catalog → inspector → preview → apply → verify route sequence, the reviewed digest, the unsupported component shown before approval, and the verification result. `browser-smoke.html` is the browser-readable fixture output. The 1440px and 390px PNG visual artifacts show all adoption labels and the completed flow; deterministic SVG sources and `scripts/rasterize-svg.swift` keep the captures reproducible offline.
-
-Verify the handler-backed artifact is current with:
-
-```sh
-npx vitest run apps/web/src/operator-artifacts.test.ts
-```
+The browser-only evidence below is intentionally pending. Earlier files under
+`artifacts/not-351` were generated from a synthetic HTML renderer rather than
+the running Next.js app, so they were removed and must not be treated as
+acceptance evidence. An operator must run the configured fixture databases and
+Botmancers stub through `next dev` or `next start`, interact with the real
+`CloneReview` client component, and capture the rendered app at both widths.
 
 At both 1280px and 390px widths:
 
@@ -46,11 +45,12 @@ At both 1280px and 390px widths:
 - Apply the fixture and confirm the verification result and any differences are visible.
 - Simulate source drift and a Botmancers failure; confirm a recoverable error appears and no clone is created or activated.
 
-Recorded fixture results:
+Required operator evidence (pending):
 
-- [x] Featured, Listed, Discussed, Emerging, and Observed use are distinguishable at desktop and narrow mobile widths.
-- [x] Labels are explicitly scoped to public evidence and do not imply private use.
-- [x] Catalog → inspector → preview → apply → verify completed.
-- [x] `unsupported-crm` appears as unavailable before approval.
-- [x] Apply result and passing verification are visible.
+- [ ] Capture the running app at desktop width after checking all five visible label states.
+- [ ] Capture the running app at 390px after checking all five visible label states.
+- [ ] Record a real browser catalog → inspector → preview → apply → verify run.
+- [ ] Record that the permission and omission acknowledgements gate the apply button.
+- [ ] Record that `unsupported-crm` appears as unavailable before approval.
+- [ ] Record the apply result and verification differences from the real client component.
 - [ ] Live Grok and Botmancers connectivity remains deployment-environment evidence.

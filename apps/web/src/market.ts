@@ -48,7 +48,36 @@ type Dependencies = {
   source(source: string): SourceAdapter;
   botmancers: BotmancersHttpClient;
   now?: () => string;
+  manifestFilterConcurrency?: number;
 };
+
+type VerificationError = {
+  code: MarketError["code"];
+  message: string;
+  recoverable: true;
+};
+
+function approvalError(error: PlanApprovalError): MarketError {
+  const code = error.code === "changed_plan_digest"
+    ? "stale_plan"
+    : error.code === "missing_plan_digest"
+      ? "approval_required"
+      : "unsafe_plan";
+  return new MarketError(code, error.message);
+}
+
+async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, operation: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await operation(items[index]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
 
 export class MarketError extends Error {
   constructor(readonly code: "not_found" | "source_drift" | "stored_data_unavailable" | "target_unavailable" | "unsafe_plan" | "stale_plan" | "approval_required", message: string) {
@@ -59,10 +88,12 @@ export class MarketError extends Error {
 export class MarketService {
   readonly #deps: Dependencies;
   readonly #now: () => string;
+  readonly #manifestFilterConcurrency: number;
 
   constructor(dependencies: Dependencies) {
     this.#deps = dependencies;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
+    this.#manifestFilterConcurrency = Math.max(1, Math.floor(dependencies.manifestFilterConcurrency ?? 8));
   }
 
   async #allCatalog(): Promise<CatalogEntry[]> {
@@ -94,14 +125,13 @@ export class MarketService {
     });
     const filterWarnings: CatalogFilterWarning[] = [];
     if (filters.capability || filters.integration) {
-      const matches = await Promise.all(items.map(async (entry) => {
+      const checked = await mapConcurrent(items, this.#manifestFilterConcurrency, async (entry) => {
         let manifest;
         try {
           manifest = await this.manifest(entry.provenance.source);
         } catch (error) {
           const marketError = error instanceof MarketError ? error : new MarketError("source_drift", "Source detail changed");
-          filterWarnings.push({ source: entry.provenance.source, code: "source_drift", message: marketError.message });
-          return false;
+          return { matches: false, warning: { source: entry.provenance.source, code: "source_drift" as const, message: marketError.message } };
         }
         const capability = filters.capability;
         const hasCapability = !capability
@@ -109,9 +139,10 @@ export class MarketService {
           || (capability === "memory" && manifest.memories.length > 0)
           || (capability === "skill" && manifest.skills.length > 0)
           || (capability === "routine" && manifest.routines.length > 0);
-        return hasCapability && (!filters.integration || manifest.integrations.some(({ id }) => id === filters.integration));
-      }));
-      items = items.filter((_entry, index) => matches[index]);
+        return { matches: hasCapability && (!filters.integration || manifest.integrations.some(({ id }) => id === filters.integration)) };
+      });
+      for (const result of checked) if (result.warning) filterWarnings.push(result.warning);
+      items = items.filter((_entry, index) => checked[index]?.matches);
     }
     return { items, total: items.length, filterWarnings };
   }
@@ -130,7 +161,13 @@ export class MarketService {
   }
 
   async manifest(source: SourceIdentity, retrievedAt = this.#now()) {
-    if (!await this.#deps.catalog.getTemplate(source)) throw new MarketError("not_found", "Template is not in the catalog");
+    let entry: CatalogEntry | undefined;
+    try {
+      entry = await this.#deps.catalog.getTemplate(source);
+    } catch (error) {
+      throw new MarketError("stored_data_unavailable", error instanceof Error ? error.message : "Stored catalog detail is unavailable");
+    }
+    if (!entry) throw new MarketError("not_found", "Template is not in the catalog");
     try {
       const adapter = this.#deps.source(source.provider);
       const raw = await adapter.fetchTemplate(source);
@@ -163,21 +200,18 @@ export class MarketService {
     try {
       capabilities = await this.#deps.botmancers.getCapabilities();
     } catch (error) {
-      if (error instanceof PlanApprovalError) {
-        const code = error.code === "changed_plan_digest" ? "stale_plan" : error.code === "missing_plan_digest" ? "approval_required" : "unsafe_plan";
-        throw new MarketError(code, error.message);
-      }
       throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers is unavailable");
     }
     const result = planClone(manifest, capabilities, input.policy);
     if (result.status !== "planned") throw new MarketError("unsafe_plan", `Unable to plan clone: ${result.status}`);
     const compatibility = result.plan;
-    const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest, compatibilityPlan: compatibility, now: this.#now });
     const draft = createBotmancersClonePlan({ manifest, compatibilityPlan: compatibility, createdAt: reviewedAt });
     try {
+      const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest, compatibilityPlan: compatibility, now: this.#now });
       const preview = await target.preview(draft);
       return { manifest, compatibility, plan: withReviewedPlanDigest(draft, preview), preview };
     } catch (error) {
+      if (error instanceof PlanApprovalError) throw approvalError(error);
       throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers is unavailable");
     }
   }
@@ -199,12 +233,26 @@ export class MarketService {
     const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest: review.manifest, compatibilityPlan: review.compatibility, now: this.#now });
     try {
       const result = await target.apply(review.plan, operation);
-      return { result, operation, planDigest: review.plan.id };
-    } catch (error) {
-      if (error instanceof PlanApprovalError) {
-        const code = error.code === "changed_plan_digest" ? "stale_plan" : error.code === "missing_plan_digest" ? "approval_required" : "unsafe_plan";
-        throw new MarketError(code, error.message);
+      if (result.status !== "succeeded") return { result, operation, planDigest: review.plan.id };
+      const verificationOperationHash = createHash("sha256")
+        .update(`verify\0${review.plan.id}\0${result.targetReference}`)
+        .digest("hex");
+      const verificationOperation = {
+        operationId: `verify-${verificationOperationHash.slice(0, 24)}`,
+        idempotencyKey: `clone-market:verify:${verificationOperationHash}`,
+      };
+      try {
+        const verification = await target.verify({ plan: review.plan, targetReference: result.targetReference }, verificationOperation);
+        return { result, operation, planDigest: review.plan.id, verification };
+      } catch (error) {
+        const mapped = error instanceof PlanApprovalError
+          ? approvalError(error)
+          : new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers verification failed");
+        const verificationError: VerificationError = { code: mapped.code, message: mapped.message, recoverable: true };
+        return { result, operation, planDigest: review.plan.id, verificationError };
       }
+    } catch (error) {
+      if (error instanceof PlanApprovalError) throw approvalError(error);
       throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers apply failed");
     }
   }
@@ -220,10 +268,7 @@ export class MarketService {
     try {
       return await target.verify({ plan: review.plan, targetReference: input.targetReference }, operation);
     } catch (error) {
-      if (error instanceof PlanApprovalError) {
-        const code = error.code === "changed_plan_digest" ? "stale_plan" : error.code === "missing_plan_digest" ? "approval_required" : "unsafe_plan";
-        throw new MarketError(code, error.message);
-      }
+      if (error instanceof PlanApprovalError) throw approvalError(error);
       throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers verification failed");
     }
   }
