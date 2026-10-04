@@ -88,6 +88,8 @@ export type V0AcceptanceReport = {
     verification: VerifyResult;
     returnUrl: string;
     replaySameBot?: boolean;
+    /** Observed Botmancers bot count after idempotent replay (API list, not stub map size). */
+    replayBotCount?: number;
   };
   browser: {
     status: "operator_required" | "recorded";

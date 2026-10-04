@@ -43,6 +43,7 @@ describe("V0 acceptance harness [agent]", () => {
     expect(report.target?.botmancersBotId).toMatch(/^bot-/);
     expect(report.target?.verification.status).toBe("passed");
     expect(report.target?.replaySameBot).toBe(true);
+    expect(report.target?.replayBotCount).toBe(1);
     expect(report.target?.returnUrl).toBe(botmancersBotUrl("http://127.0.0.1:3100/", report.target!.botmancersBotId));
 
     const byId = Object.fromEntries(report.failureCases.map((item) => [item.id, item]));

@@ -51,6 +51,9 @@ export class BotmancersAcceptanceStub {
     });
     if (this.offline) throw new Error("Botmancers unavailable");
     if (path === "/v1/capabilities" && init.method === "GET") return response(200, this.capabilities);
+    if (path === "/v1/imports" && init.method === "GET") {
+      return response(200, { items: [...this.imports.keys()].map((id) => ({ id })) });
+    }
     if (path === "/v1/imports" && init.method === "POST") {
       if (this.importFailureStatus !== undefined) return response(this.importFailureStatus, { error: "rejected" });
       const key = init.headers["idempotency-key"] ?? "";
@@ -84,6 +87,10 @@ export class BotmancersAcceptanceStub {
 
   botCount(): number {
     return this.imports.size;
+  }
+
+  listBots(): { id: string }[] {
+    return [...this.imports.keys()].map((id) => ({ id }));
   }
 
   operationIds(): string[] {

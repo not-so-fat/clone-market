@@ -324,6 +324,17 @@ describe("BotmancersHttpClient", () => {
       "baseUrl must not contain credentials",
     );
   });
+
+  it("lists bots from v1/imports or api/bots", async () => {
+    const fetch: BotmancersFetch = async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/imports") return response(404, { error: "not_found" });
+      if (path === "/api/bots") return response(200, [{ id: "bot-1" }, { id: "bot-2" }]);
+      return response(404, { error: "not_found" });
+    };
+    const client = new BotmancersHttpClient({ fetch, baseUrl: "https://botmancers.example/", maxRetries: 0, retryBaseMs: 0 });
+    await expect(client.listBots()).resolves.toEqual([{ id: "bot-1" }, { id: "bot-2" }]);
+  });
 });
 
 describe("package boundary", () => {

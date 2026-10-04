@@ -3,12 +3,9 @@ import { dirname, join } from "node:path";
 
 import type { SourceIdentity } from "@clone-market/core";
 
+import { parseAcceptanceCli, resolveLiveMode } from "./parse-cli.js";
+import { resolveCloneMarketDataPath } from "../config.js";
 import { runV0Acceptance } from "./run.js";
-
-function option(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  return index < 0 ? undefined : args[index + 1];
-}
 
 function parseTemplate(value: string): SourceIdentity {
   const separator = value.indexOf(":");
@@ -19,20 +16,24 @@ function parseTemplate(value: string): SourceIdentity {
 }
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
-  const wantsLive = args.includes("--live");
-  const liveEnabled = process.env.CLONE_MARKET_ACCEPTANCE_LIVE === "1";
-  if (wantsLive && !liveEnabled) {
-    console.error("Live V0 acceptance requires CLONE_MARKET_ACCEPTANCE_LIVE=1 (opt-in; may use network).");
+  const parsed = parseAcceptanceCli(args);
+  if (parsed.parseOnly) {
+    console.log(JSON.stringify(parsed));
+    return 0;
+  }
+  const liveMode = resolveLiveMode(args, process.env);
+  if (liveMode.error !== undefined) {
+    console.error(liveMode.error);
     return 2;
   }
-  const live = wantsLive && liveEnabled;
+  const live = liveMode.live;
   const stamp = new Date().toISOString().replaceAll(":", "-");
-  const reportPath = option(args, "--report")
+  const reportPath = parsed.reportPath
     ?? join(process.cwd(), ".temporal/logs", `v0-acceptance-${live ? "live" : "fixture"}-${stamp}.json`);
   mkdirSync(dirname(reportPath), { recursive: true });
-  const template = option(args, "--template") ?? process.env.CLONE_MARKET_ACCEPTANCE_TEMPLATE;
-  const catalogPath = option(args, "--catalog") ?? process.env.CLONE_MARKET_CATALOG_DB;
-  const evidencePath = option(args, "--evidence") ?? process.env.CLONE_MARKET_EVIDENCE_DB;
+  const template = parsed.template ?? process.env.CLONE_MARKET_ACCEPTANCE_TEMPLATE;
+  const catalogPath = parsed.catalogPath ?? process.env.CLONE_MARKET_CATALOG_DB;
+  const evidencePath = parsed.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB;
   const report = await runV0Acceptance({
     mode: live ? "live" : "fixture",
     reportPath,
@@ -45,8 +46,8 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     ...(process.env.CLONE_MARKET_GROK_BASE_URL === undefined
       ? {}
       : { grokBaseUrl: process.env.CLONE_MARKET_GROK_BASE_URL }),
-    ...(catalogPath === undefined ? {} : { catalogPath }),
-    ...(evidencePath === undefined ? {} : { evidencePath }),
+    ...(catalogPath === undefined ? {} : { catalogPath: resolveCloneMarketDataPath(catalogPath) }),
+    ...(evidencePath === undefined ? {} : { evidencePath: resolveCloneMarketDataPath(evidencePath) }),
     ...(template === undefined ? {} : { source: parseTemplate(template) }),
     ...(process.env.CLONE_MARKET_ACCEPTANCE_PEER_REPOS === "1" ? { verifyPeerRepos: true } : {}),
     ...(process.env.BOTMANCERS_ROOT === undefined ? {} : { botmancersRoot: process.env.BOTMANCERS_ROOT }),

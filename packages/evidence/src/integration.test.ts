@@ -8,6 +8,7 @@ import { SCHEMA_VERSION } from "@clone-market/core";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runEvidenceImportCli } from "./cli.js";
+import { runEvidenceDeriveCli } from "./derive-cli.js";
 import { importEvidence } from "./importer.js";
 import { EvidenceService } from "./service.js";
 import { SqliteEvidenceRepository } from "./sqlite-repository.js";
@@ -282,6 +283,39 @@ describe("reviewed evidence import CLI", () => {
       { id: "core-port", reviewState: "pending" },
     ]);
     repository.close();
+  });
+});
+
+describe("evidence derive CLI", () => {
+  it("writes an adoption snapshot for a template with reviewed rows", async () => {
+    const path = await temporaryPath();
+    const repository = new SqliteEvidenceRepository(path);
+    await importEvidence(repository, JSON.stringify([raw("derive-me", { type: "trying_or_installed" })]), { format: "json" });
+    repository.close();
+    let stdout = "";
+    const exit = await runEvidenceDeriveCli(
+      ["--database", path, "--template-id", "template-1", "--calculated-at", "2026-10-03T12:00:00.000Z"],
+      { stdout: (value) => { stdout += value; }, stderr: () => undefined },
+    );
+    expect(exit).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ templateId: "template-1", evidenceRows: 1 });
+    const reopened = new SqliteEvidenceRepository(path, { readOnly: true });
+    await expect(new EvidenceService(reopened).getLatest("template-1")).resolves.toMatchObject({
+      snapshot: { templateId: "template-1" },
+    });
+    reopened.close();
+  });
+
+  it("fails when the template has no evidence rows", async () => {
+    const path = await temporaryPath();
+    new SqliteEvidenceRepository(path).close();
+    let stderr = "";
+    const exit = await runEvidenceDeriveCli(
+      ["--database", path, "--template-id", "missing"],
+      { stdout: () => undefined, stderr: (value) => { stderr += value; } },
+    );
+    expect(exit).toBe(1);
+    expect(stderr).toMatch(/No evidence rows/);
   });
 });
 

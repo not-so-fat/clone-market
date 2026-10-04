@@ -138,4 +138,32 @@ export class BotmancersHttpClient {
     }
     return result as unknown as BotmancersImportRecord;
   }
+
+  /** Count saved bots via GET v1/imports, then GET api/bots (Botmancers Next.js list). */
+  async listBots(): Promise<{ id: string }[]> {
+    try {
+      return parseBotList(await this.#request("v1/imports", { method: "GET" }));
+    } catch {
+      return parseBotList(await this.#request("api/bots", { method: "GET" }));
+    }
+  }
+}
+
+function parseBotList(value: unknown): { id: string }[] {
+  const rows = Array.isArray(value)
+    ? value
+    : Array.isArray(object(value)?.items)
+      ? (object(value)?.items as unknown[])
+      : Array.isArray(object(value)?.bots)
+        ? (object(value)?.bots as unknown[])
+        : undefined;
+  if (rows === undefined) throw new BotmancersResponseError("Bot list response must be an array of ids");
+  return rows.map((row) => {
+    if (typeof row === "string" && row.length > 0) return { id: row };
+    const item = object(row);
+    if (typeof item?.id !== "string" || item.id.length === 0) {
+      throw new BotmancersResponseError("Bot list entries must include an id");
+    }
+    return { id: item.id };
+  });
 }

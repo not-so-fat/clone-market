@@ -10,8 +10,9 @@ import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
 
 import { botmancersBotUrl } from "../botmancers-url.js";
+import { resolveCloneMarketDataPath } from "../config.js";
 import { createV1Handlers } from "../http.js";
-import { MarketService } from "../market.js";
+import { MarketService, type CatalogItem } from "../market.js";
 import {
   ACCEPTANCE_CAPABILITIES,
   BotmancersAcceptanceStub,
@@ -130,6 +131,63 @@ function inspectEvidence(
     usesInstallCount: flags.usesInstallCount,
     usesPrivateUsage: flags.usesPrivateUsage,
   };
+}
+
+async function ensureAdoptionSnapshots(
+  repository: SqliteEvidenceRepository,
+  evidence: EvidenceService,
+  templateIds: string[],
+  calculatedAt: string,
+): Promise<void> {
+  for (const templateId of templateIds) {
+    const rows = await repository.listEvidence(templateId);
+    if (rows.length === 0) continue;
+    if (await evidence.getLatest(templateId) !== undefined) continue;
+    await evidence.derive(templateId, { calculatedAt });
+  }
+}
+
+async function inspectDisplayedLabels(
+  handlers: ReturnType<typeof createV1Handlers>,
+  items: CatalogItem[],
+  chosen: SourceIdentity,
+): Promise<NonNullable<V0AcceptanceReport["evidence"]>> {
+  const displayed = items.filter((item) => item.adoption !== undefined);
+  const sources = displayed.length > 0
+    ? displayed.map((item) => item.provenance.source)
+    : [chosen];
+  let chosenEvidence: NonNullable<V0AcceptanceReport["evidence"]> | undefined;
+  for (const source of sources) {
+    const evidenceResponse = await handlers.evidence({ params: params(source) });
+    if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
+    const inspected = inspectEvidence(evidenceResponse.body as EvidenceLookup, source);
+    if (inspected.usesInstallCount || inspected.usesPrivateUsage) {
+      throw new AcceptanceFailure(
+        "label_uses_forbidden_metric",
+        `Adoption label for ${source.provider}:${source.externalId} used forbidden signals (installCount=${inspected.usesInstallCount}, privateUsage=${inspected.usesPrivateUsage})`,
+      );
+    }
+    if (source.provider === chosen.provider && source.externalId === chosen.externalId) {
+      chosenEvidence = inspected;
+    }
+  }
+  if (chosenEvidence === undefined) {
+    const evidenceResponse = await handlers.evidence({ params: params(chosen) });
+    if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
+    chosenEvidence = inspectEvidence(evidenceResponse.body as EvidenceLookup, chosen);
+    if (chosenEvidence.usesInstallCount || chosenEvidence.usesPrivateUsage) {
+      throw new AcceptanceFailure(
+        "label_uses_forbidden_metric",
+        `Adoption label used forbidden signals (installCount=${chosenEvidence.usesInstallCount}, privateUsage=${chosenEvidence.usesPrivateUsage})`,
+      );
+    }
+  }
+  return chosenEvidence;
+}
+
+function optionalResolvedPath(path: string | undefined): string | undefined {
+  if (path === undefined || path.length === 0) return path;
+  return resolveCloneMarketDataPath(path);
 }
 
 async function runFailureCases(input: {
@@ -311,6 +369,7 @@ async function previewAndApply(input: {
   source: SourceIdentity;
   uiBaseUrl: string;
   replay: boolean;
+  listBots?: () => Promise<{ id: string }[]>;
 }): Promise<{
   compatibility: NonNullable<V0AcceptanceReport["compatibility"]>;
   approval: NonNullable<V0AcceptanceReport["approval"]>;
@@ -336,7 +395,9 @@ async function previewAndApply(input: {
     throw new AcceptanceFailure("verification_failed", `Verification did not pass: ${JSON.stringify(applyBody.verification ?? applyBody)}`);
   }
   let replaySameBot: boolean | undefined;
+  let replayBotCount: number | undefined;
   if (input.replay) {
+    const afterApply = input.listBots === undefined ? undefined : await input.listBots();
     const replayed = await input.handlers.apply({ params: identity, body: applyBodyPayload });
     if (replayed.status !== 200) responseError(replayed, "apply_failed");
     const replayBody = replayed.body as ApplyBody;
@@ -347,6 +408,20 @@ async function previewAndApply(input: {
         "duplicate_bot",
         `Replaying ${applyBody.operation.operationId} created ${replayBody.result?.targetReference} instead of ${applyBody.result.targetReference}`,
       );
+    }
+    if (input.listBots !== undefined) {
+      const afterReplay = await input.listBots();
+      const botId = applyBody.result.targetReference;
+      const listedAfterApply = afterApply ?? [];
+      const applyMatches = listedAfterApply.filter((bot) => bot.id === botId).length;
+      const replayMatches = afterReplay.filter((bot) => bot.id === botId).length;
+      if (afterReplay.length !== listedAfterApply.length || applyMatches !== 1 || replayMatches !== 1) {
+        throw new AcceptanceFailure(
+          "duplicate_bot",
+          `Replaying ${applyBody.operation.operationId} changed Botmancers bot count from ${listedAfterApply.length} to ${afterReplay.length} (id ${botId} seen ${replayMatches} times)`,
+        );
+      }
+      replayBotCount = afterReplay.length;
     }
   }
   return {
@@ -365,6 +440,7 @@ async function previewAndApply(input: {
       verification: applyBody.verification!,
       returnUrl: botmancersBotUrl(input.uiBaseUrl, applyBody.result.targetReference),
       ...(replaySameBot === undefined ? {} : { replaySameBot }),
+      ...(replayBotCount === undefined ? {} : { replayBotCount }),
     },
   };
 }
@@ -389,15 +465,16 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
   const fixtureEvidencePath = join(work, "evidence.sqlite");
   const persistOperatorDbs = mode === "live";
   const catalogPath = persistOperatorDbs
-    ? (options.catalogPath ?? process.env.CLONE_MARKET_CATALOG_DB)
+    ? optionalResolvedPath(options.catalogPath ?? process.env.CLONE_MARKET_CATALOG_DB)
     : join(work, "catalog.sqlite");
   const evidencePath = persistOperatorDbs
-    ? (options.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB)
+    ? optionalResolvedPath(options.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB)
     : fixtureEvidencePath;
   let closeEvidence: (() => void) | undefined;
   let closeFailureEvidence: (() => void) | undefined;
   let closeCatalog: (() => void) | undefined;
   let evidence: EvidenceService | undefined;
+  let liveEvidenceRepository: SqliteEvidenceRepository | undefined;
 
   const report: V0AcceptanceReport = {
     schemaVersion: "1.0.0",
@@ -447,7 +524,8 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         throw new AcceptanceFailure("missing_evidence_db", `Live evidence database not found at ${evidencePath}; import reviewed rows before smoke:v0:live`);
       }
       mkdirSync(dirname(catalogPath), { recursive: true });
-      const repository = new SqliteEvidenceRepository(evidencePath, { readOnly: true });
+      const repository = new SqliteEvidenceRepository(evidencePath);
+      liveEvidenceRepository = repository;
       closeEvidence = () => repository.close();
       evidence = new EvidenceService(repository);
     } else {
@@ -486,17 +564,9 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       }));
       const catalogResponse = await handlers.catalog();
       if (catalogResponse.status !== 200) responseError(catalogResponse, "catalog_failed");
-      const catalogBody = catalogResponse.body as { total: number };
+      const catalogBody = catalogResponse.body as { total: number; items: CatalogItem[] };
       if (catalogBody.total < 1) throw new AcceptanceFailure("catalog_empty", "Catalog traversal returned zero templates");
-      const evidenceResponse = await handlers.evidence({ params: params(sourceIdentity) });
-      if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
-      report.evidence = inspectEvidence(evidenceResponse.body as EvidenceLookup, sourceIdentity);
-      if (report.evidence.usesInstallCount || report.evidence.usesPrivateUsage) {
-        throw new AcceptanceFailure(
-          "label_uses_forbidden_metric",
-          `Adoption label used forbidden signals (installCount=${report.evidence.usesInstallCount}, privateUsage=${report.evidence.usesPrivateUsage})`,
-        );
-      }
+      report.evidence = await inspectDisplayedLabels(handlers, catalogBody.items, sourceIdentity);
       const stub = new BotmancersAcceptanceStub();
       const applyHandlers = createV1Handlers(new MarketService({
         catalog: catalogRepo,
@@ -513,6 +583,7 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         source: sourceIdentity,
         uiBaseUrl,
         replay: true,
+        listBots: async () => stub.client().listBots(),
       });
       const detail = await applyHandlers.detail({ params: params(sourceIdentity) });
       const detailBody = detail.body as { manifest: { provenanceUrl: string; retrievedAt: string; template: { name: string } } };
@@ -572,15 +643,25 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         botmancers: client,
         now,
       }));
-      const evidenceResponse = await handlers.evidence({ params: params(sourceIdentity) });
-      if (evidenceResponse.status !== 200) responseError(evidenceResponse, "evidence_failed");
-      report.evidence = inspectEvidence(evidenceResponse.body as EvidenceLookup, sourceIdentity);
-      if (report.evidence.usesInstallCount || report.evidence.usesPrivateUsage) {
-        throw new AcceptanceFailure(
-          "label_uses_forbidden_metric",
-          `Adoption label used forbidden signals (installCount=${report.evidence.usesInstallCount}, privateUsage=${report.evidence.usesPrivateUsage})`,
-        );
+      const catalogResponse = await handlers.catalog();
+      if (catalogResponse.status !== 200) responseError(catalogResponse, "catalog_failed");
+      const catalogBody = catalogResponse.body as { items: CatalogItem[] };
+      if (liveEvidenceRepository === undefined) {
+        throw new AcceptanceFailure("missing_evidence_db", "Live evidence repository was not opened");
       }
+      await ensureAdoptionSnapshots(
+        liveEvidenceRepository,
+        evidence!,
+        [...catalogBody.items.map((item) => item.id), `${sourceIdentity.provider}:${sourceIdentity.externalId}`],
+        now(),
+      );
+      const catalogAfterDerive = await handlers.catalog();
+      if (catalogAfterDerive.status !== 200) responseError(catalogAfterDerive, "catalog_failed");
+      report.evidence = await inspectDisplayedLabels(
+        handlers,
+        (catalogAfterDerive.body as { items: CatalogItem[] }).items,
+        sourceIdentity,
+      );
       const preview = await handlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
       if (preview.status !== 200) responseError(preview, "preview_failed");
       const applied = await previewAndApply({
@@ -588,6 +669,7 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         source: sourceIdentity,
         uiBaseUrl,
         replay: true,
+        listBots: async () => client.listBots(),
       });
       report.compatibility = applied.compatibility;
       report.approval = applied.approval;
