@@ -8,9 +8,10 @@ Copy `.env.example` and configure:
 
 - `CLONE_MARKET_CATALOG_DB`: indexed catalog SQLite database.
 - `CLONE_MARKET_EVIDENCE_DB`: public evidence SQLite database.
+- `CLONE_MARKET_ARTIFACT_DIR`: directory for reviewed private Botmancers-compatible artifacts (default `./data/artifacts`).
 - `CLONE_MARKET_GROK_BASE_URL`: Grok Marketplace source endpoint.
-- `CLONE_MARKET_BOTMANCERS_BASE_URL`: local Botmancers API endpoint (default `http://127.0.0.1:8787/`; do not copy a production URL for live smoke).
-- `CLONE_MARKET_BOTMANCERS_UI_BASE_URL`: Botmancers UI base used for the post-apply return link.
+- `CLONE_MARKET_BOTMANCERS_BASE_URL`: optional local Botmancers API (not required for V0 export/verify; default `http://127.0.0.1:8787/`).
+- `CLONE_MARKET_BOTMANCERS_UI_BASE_URL`: unused in V0 (Botmancers has no proven `bots/<id>` return page).
 
 The central databases contain catalog metadata and public evidence only. Full source manifests are fetched on demand for each detail, preview, apply, or verification request. They are not written to SQLite, cookies, local storage, or session storage.
 
@@ -20,21 +21,23 @@ The central databases contain catalog metadata and public evidence only. Full so
 - `GET /api/v1/templates/:provider/:externalId`
 - `GET /api/v1/templates/:provider/:externalId/evidence`
 - `POST /api/v1/templates/:provider/:externalId/clone/preview`
-- `POST /api/v1/templates/:provider/:externalId/clone/apply`
-- `POST /api/v1/templates/:provider/:externalId/clone/verify`
+- `POST /api/v1/templates/:provider/:externalId/clone/export`
+- `POST /api/v1/templates/:provider/:externalId/clone/verify-artifact`
+- `POST /api/v1/templates/:provider/:externalId/clone/apply` (optional Botmancers HTTP apply; not the V0 path)
+- `POST /api/v1/templates/:provider/:externalId/clone/verify` (optional Botmancers HTTP verify; not the V0 path)
 
-Preview is side-effect free. Apply requires `approved: true`, `planDigest`, and `reviewedAt` (the displayed plan's `createdAt`). A successful apply verifies the created clone in the same request and returns either the verification result or a verification-only error; the UI never invites a second apply after creation. After a successful apply the UI offers **Open imported bot in Botmancers** using `CLONE_MARKET_BOTMANCERS_UI_BASE_URL`. The standalone verification route requires the same review identity plus `targetReference` and remains available while that reviewed source is current. The server refetches and replans before apply, and changed source or target inputs force another review before any import.
+Preview is side-effect free. Export requires `approved: true`, `planDigest`, and `reviewedAt` (the displayed plan's `createdAt`). A successful export writes `botmancers/import.json` to `CLONE_MARKET_ARTIFACT_DIR` and verifies that file against the reviewed plan without a Botmancers endpoint. Repeating the same approved inputs reuses one artifact identity. The server refetches and replans before export, and changed source or capability inputs force another review. Applying the file inside Botmancers is unsupported in V0.
 
 ## V0 acceptance
 
 Machine-readable offline acceptance lives in `src/acceptance/` and is documented in [`docs/acceptance-v0.md`](../../docs/acceptance-v0.md).
 
 - **[agent]** `npm run smoke:v0` from the repository root (network-free fixture + stub).
-- **[operator]** `npm run smoke:v0:live` with `CLONE_MARKET_ACCEPTANCE_LIVE=1` (set by the script). Relative `CLONE_MARKET_CATALOG_DB` / `CLONE_MARKET_EVIDENCE_DB` paths resolve to the repository root so they match `next dev`. Import reviewed evidence, then `npm run evidence:derive` (or let live smoke derive missing snapshots). The catalog DB is retained for `next dev`.
+- **[operator]** `npm run smoke:v0:live` with `CLONE_MARKET_ACCEPTANCE_LIVE=1` (set by the script). Relative `CLONE_MARKET_CATALOG_DB` / `CLONE_MARKET_EVIDENCE_DB` / `CLONE_MARKET_ARTIFACT_DIR` paths resolve to the repository root so they match `next dev`. Import reviewed evidence, then `npm run evidence:derive` (or let live smoke derive missing snapshots). The catalog DB and artifact directory are retained for `next dev`.
 
 ## Operator browser checklist **[operator]**
 
-Earlier files under `artifacts/not-351` were generated from a synthetic HTML renderer rather than the running Next.js app, so they were removed and must not be treated as acceptance evidence. An operator must run configured databases and a reachable Botmancers instance through `next dev` or `next start`, interact with the real `CloneReview` client component, and capture the rendered app at both widths.
+Earlier files under `artifacts/not-351` were generated from a synthetic HTML renderer rather than the running Next.js app, so they were removed and must not be treated as acceptance evidence. An operator must run configured databases through `next dev` or `next start`, interact with the real `CloneReview` client component, and capture the rendered app at both widths.
 
 At both 1280px and 390px widths:
 
@@ -44,16 +47,16 @@ At both 1280px and 390px widths:
 - Open each adoption label and confirm exact evidence rows and rule contributions appear.
 - Inspect retrieval history, current public components, permission, and redistribution state.
 - Preview a template containing an unsupported integration; confirm `unavailable` appears before approval.
-- Confirm preview causes no Botmancers import, unchecked approval cannot apply, and a refreshed/changed digest forces review.
-- Apply the template and confirm the verification result, Botmancers bot id, and **Open imported bot in Botmancers** return link.
-- Simulate source drift and a Botmancers failure; confirm a recoverable error appears and no clone is created or activated.
+- Confirm preview writes no artifact, unchecked approval cannot export, and a refreshed/changed digest forces review.
+- Export the template and confirm the artifact digest plus offline verification result.
+- Confirm the UI does not send operators to an unsupported Botmancers `bots/<id>` page.
 
 Required operator evidence:
 
 - [ ] Capture the running app at desktop width after checking visible label states.
 - [ ] Capture the running app at 390px after checking visible label states.
-- [ ] Record a real browser catalog → inspector → preview → apply → verify run.
-- [ ] Record that the permission and omission acknowledgements gate the apply button.
+- [ ] Record a real browser catalog → inspector → preview → export → verify run.
+- [ ] Record that the permission and omission acknowledgements gate the export button.
 - [ ] Record that unsupported integrations appear as unavailable before approval.
-- [ ] Record the apply result, verification, and Botmancers return from the real client component.
-- [ ] Live Grok and Botmancers connectivity remains deployment-environment evidence.
+- [ ] Record the export identity, artifact digest, and offline verification from the real client component.
+- [ ] Live Grok connectivity remains deployment-environment evidence. Applying the artifact inside Botmancers is not required for V0.

@@ -7,9 +7,9 @@ export type AcceptanceStatus = "passed" | "failed";
 
 export type FailureCaseId =
   | "source_schema_drift"
-  | "botmancers_unavailable"
-  | "botmancers_unavailable_apply"
+  | "artifact_sink_unavailable"
   | "changed_plan_after_preview"
+  | "tampered_artifact"
   | "idempotent_retry";
 
 export type FailureCaseReport = {
@@ -82,14 +82,13 @@ export type V0AcceptanceReport = {
     reviewedAt: string;
     planDigest: string;
   };
-  target?: {
-    operationId: string;
-    botmancersBotId: string;
+  artifact?: {
+    identity: string;
+    path: string;
+    digest: string;
     verification: VerifyResult;
-    returnUrl: string;
-    replaySameBot?: boolean;
-    /** Observed Botmancers bot count after idempotent replay (API list, not stub map size). */
-    replayBotCount?: number;
+    replaySameDigest?: boolean;
+    replayDuplicate?: boolean;
   };
   browser: {
     status: "operator_required" | "recorded";

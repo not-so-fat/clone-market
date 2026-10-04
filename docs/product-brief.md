@@ -173,7 +173,7 @@ V0 proves the end-to-end contract, not merely scraping:
 6. Identify missing integrations, memories, routines, and target-runtime behavior.
 7. Verify the generated artifact without executing imported instructions against real credentials.
 
-Offline fixture acceptance covers items 1–7 against captured Marketplace HTML and an in-process Botmancers stub. Live Marketplace + local Botmancers proof is the operator sequence in `docs/acceptance-v0.md`.
+Offline fixture acceptance covers items 1–7 against captured Marketplace HTML, declared Botmancers capabilities, and a local artifact sink. Live Marketplace proof is the operator sequence in `docs/acceptance-v0.md`. Applying the artifact inside Botmancers is tracked separately.
 
 ### Remaining unsupported components and external uncertainties
 
@@ -181,8 +181,8 @@ Offline fixture acceptance covers items 1–7 against captured Marketplace HTML 
 - Marketplace `installCount` remains all-zero in observed public payloads and is never used for adoption labels.
 - Public Grok schema may drift without notice; drift fails visibly rather than guessing.
 - Agent Deck and coding-agent targets are out of V0 scope.
-- Live Botmancers API/UI availability and auth are external to Clone Market.
-- Botmancers root offline tests are not vendored; they run only when `BOTMANCERS_ROOT` is provided. `not-so-fat/botmancers` has no GitHub Actions CI as of 2026-10-04. Installed `npm run lint` and `tsc --noEmit` on that `main` currently fail; Clone Market’s peer check must not report `passed` for those runs.
+- Live Botmancers API/UI availability, auth, and `bots/<id>` pages are external and unsupported in V0.
+- Peer checks of a Botmancers checkout are outside V0 acceptance.
 
 ## Negative space
 

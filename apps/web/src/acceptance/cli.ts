@@ -34,20 +34,16 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   const template = parsed.template ?? process.env.CLONE_MARKET_ACCEPTANCE_TEMPLATE;
   const catalogPath = parsed.catalogPath ?? process.env.CLONE_MARKET_CATALOG_DB;
   const evidencePath = parsed.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB;
+  const artifactDir = process.env.CLONE_MARKET_ARTIFACT_DIR;
   const report = await runV0Acceptance({
     mode: live ? "live" : "fixture",
     reportPath,
-    ...(process.env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL === undefined
-      ? {}
-      : { botmancersUiBaseUrl: process.env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL }),
-    ...(process.env.CLONE_MARKET_BOTMANCERS_BASE_URL === undefined
-      ? {}
-      : { botmancersBaseUrl: process.env.CLONE_MARKET_BOTMANCERS_BASE_URL }),
     ...(process.env.CLONE_MARKET_GROK_BASE_URL === undefined
       ? {}
       : { grokBaseUrl: process.env.CLONE_MARKET_GROK_BASE_URL }),
     ...(catalogPath === undefined ? {} : { catalogPath: resolveCloneMarketDataPath(catalogPath) }),
     ...(evidencePath === undefined ? {} : { evidencePath: resolveCloneMarketDataPath(evidencePath) }),
+    ...(artifactDir === undefined ? {} : { artifactDir: resolveCloneMarketDataPath(artifactDir) }),
     ...(template === undefined ? {} : { source: parseTemplate(template) }),
     ...(process.env.CLONE_MARKET_ACCEPTANCE_PEER_REPOS === "1" ? { verifyPeerRepos: true } : {}),
     ...(process.env.BOTMANCERS_ROOT === undefined ? {} : { botmancersRoot: process.env.BOTMANCERS_ROOT }),

@@ -116,14 +116,14 @@ function rollupPeerStatus(input: {
   return "failed";
 }
 
-/** Inspect an optional Botmancers checkout for offline tests, UI return route, and idempotency-key handling. */
+/** Outside V0 acceptance. Opt-in inspection of a Botmancers checkout; connecting to that repo is a V0 non-goal. */
 export function verifyBotmancersPeerRepo(root: string | undefined): PeerRepoCheck {
   if (root === undefined || root.length === 0) {
     return {
       status: "skipped",
       returnRouteConfirmed: false,
       idempotencyKeyConfirmed: false,
-      detail: "BOTMANCERS_ROOT unset. Set it to the Botmancers package root and CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 to run that repository's offline verification.",
+      detail: "BOTMANCERS_ROOT unset. Peer Botmancers verification is outside V0 acceptance.",
     };
   }
   if (!existsSync(join(root, "package.json"))) {

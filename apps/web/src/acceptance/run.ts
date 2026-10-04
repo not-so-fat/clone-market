@@ -4,12 +4,11 @@ import { dirname, join } from "node:path";
 
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import type { ClonePolicy } from "@clone-market/compatibility";
-import type { SourceAdapter, SourceIdentity, VerifyResult } from "@clone-market/core";
+import type { SourceAdapter, SourceIdentity } from "@clone-market/core";
 import { EvidenceService, SqliteEvidenceRepository } from "@clone-market/evidence";
 import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
-import { BotmancersHttpClient } from "@clone-market/target-botmancers";
 
-import { botmancersBotUrl } from "../botmancers-url.js";
+import { FileArtifactSink, MemoryArtifactSink, type ArtifactSink } from "../artifact-sink.js";
 import { resolveCloneMarketDataPath } from "../config.js";
 import { createV1Handlers } from "../http.js";
 import { MarketService, type CatalogItem } from "../market.js";
@@ -44,22 +43,22 @@ const POLICY: ClonePolicy = {
 export type RunV0AcceptanceOptions = {
   mode?: "fixture" | "live";
   reportPath?: string;
-  botmancersUiBaseUrl?: string;
-  botmancersBaseUrl?: string;
   grokBaseUrl?: string;
   catalogPath?: string;
   evidencePath?: string;
+  artifactDir?: string;
   source?: SourceIdentity;
   verifyPeerRepos?: boolean;
   botmancersRoot?: string;
   now?: () => string;
 };
 
-type ApplyBody = {
-  result: { status: string; operationId: string; targetReference: string; completedAt: string };
-  operation: { operationId: string; idempotencyKey: string };
-  planDigest: string;
-  verification?: VerifyResult;
+type ExportBody = {
+  identity: string;
+  created: boolean;
+  path: string;
+  digest: string;
+  verification: { status: string };
 };
 
 type EvidenceLookup = {
@@ -190,6 +189,24 @@ function optionalResolvedPath(path: string | undefined): string | undefined {
   return resolveCloneMarketDataPath(path);
 }
 
+function exportMarket(input: {
+  catalog: SqliteCatalogRepository;
+  evidence: EvidenceService;
+  adapter: SourceAdapter;
+  stub: BotmancersAcceptanceStub;
+  artifacts: ArtifactSink;
+  now: () => string;
+}) {
+  return new MarketService({
+    catalog: input.catalog,
+    evidence: input.evidence,
+    source: () => input.adapter,
+    botmancers: input.stub.client(),
+    artifacts: input.artifacts,
+    now: input.now,
+  });
+}
+
 async function runFailureCases(input: {
   catalogPath: string;
   evidence: EvidenceService;
@@ -203,11 +220,12 @@ async function runFailureCases(input: {
     const stub = new BotmancersAcceptanceStub();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("detail_drift");
-    const handlers = createV1Handlers(new MarketService({
+    const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
-      source: () => adapter,
-      botmancers: stub.client(),
+      adapter,
+      stub,
+      artifacts: new MemoryArtifactSink(),
       now: input.now,
     }));
     const response = await handlers.preview({ params: identity, body: { policy: POLICY } });
@@ -220,7 +238,7 @@ async function runFailureCases(input: {
       httpStatus: response.status,
       mutating: false,
       detail: posts === 0
-        ? `Typed source_drift response with status ${response.status}; no Botmancers mutation`
+        ? `Typed source_drift response with status ${response.status}; no artifact written`
         : `Unexpected Botmancers POST count ${posts}`,
     });
     catalog.close();
@@ -228,44 +246,21 @@ async function runFailureCases(input: {
 
   {
     const stub = new BotmancersAcceptanceStub();
-    stub.offline = true;
+    const artifacts = new MemoryArtifactSink();
+    artifacts.unavailable = true;
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
-    const handlers = createV1Handlers(new MarketService({
+    const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
-      source: () => adapter,
-      botmancers: stub.client(),
-      now: input.now,
-    }));
-    const response = await handlers.preview({ params: identity, body: { policy: POLICY } });
-    const code = (response.body as { error?: { code?: string } }).error?.code;
-    cases.push({
-      id: "botmancers_unavailable",
-      status: response.status === 503 && code === "target_unavailable" && stub.botCount() === 0 ? "passed" : "failed",
-      expectedCode: "target_unavailable",
-      httpStatus: response.status,
-      mutating: false,
-      detail: `preview target_unavailable status=${response.status}; bots=${stub.botCount()}`,
-    });
-    catalog.close();
-  }
-
-  {
-    const stub = new BotmancersAcceptanceStub();
-    const catalog = new SqliteCatalogRepository(input.catalogPath);
-    const adapter = await createFixtureGrokAdapter("happy");
-    const handlers = createV1Handlers(new MarketService({
-      catalog,
-      evidence: input.evidence,
-      source: () => adapter,
-      botmancers: stub.client(),
+      adapter,
+      stub,
+      artifacts,
       now: input.now,
     }));
     const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const previewBody = preview.body as { plan: { id: string; createdAt: string } };
-    stub.offline = true;
-    const apply = await handlers.apply({
+    const exported = await handlers.exportArtifact({
       params: identity,
       body: {
         policy: POLICY,
@@ -274,37 +269,38 @@ async function runFailureCases(input: {
         approved: true,
       },
     });
-    const code = (apply.body as { error?: { code?: string } }).error?.code;
+    const code = (exported.body as { error?: { code?: string } }).error?.code;
     cases.push({
-      id: "botmancers_unavailable_apply",
-      status: apply.status === 503 && code === "target_unavailable" && stub.botCount() === 0 ? "passed" : "failed",
-      expectedCode: "target_unavailable",
-      httpStatus: apply.status,
+      id: "artifact_sink_unavailable",
+      status: exported.status === 503 && code === "sink_unavailable" && artifacts.store.size === 0 ? "passed" : "failed",
+      expectedCode: "sink_unavailable",
+      httpStatus: exported.status,
       mutating: false,
-      detail: `apply target_unavailable status=${apply.status}; bots=${stub.botCount()}`,
+      detail: `export sink_unavailable status=${exported.status}; artifacts=${artifacts.store.size}`,
     });
     catalog.close();
   }
 
   {
     const stub = new BotmancersAcceptanceStub();
+    const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
-    const market = new MarketService({
+    const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
-      source: () => adapter,
-      botmancers: stub.client(),
+      adapter,
+      stub,
+      artifacts,
       now: input.now,
-    });
-    const handlers = createV1Handlers(market);
+    }));
     const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
     const previewBody = preview.body as { plan: { id: string; createdAt: string } };
     stub.capabilities = {
       ...ACCEPTANCE_CAPABILITIES,
       memories: "unsupported",
     };
-    const apply = await handlers.apply({
+    const exported = await handlers.exportArtifact({
       params: identity,
       body: {
         policy: POLICY,
@@ -313,27 +309,29 @@ async function runFailureCases(input: {
         approved: true,
       },
     });
-    const code = (apply.body as { error?: { code?: string } }).error?.code;
+    const code = (exported.body as { error?: { code?: string } }).error?.code;
     cases.push({
       id: "changed_plan_after_preview",
-      status: apply.status === 409 && code === "stale_plan" && stub.botCount() === 0 ? "passed" : "failed",
+      status: exported.status === 409 && code === "stale_plan" && artifacts.store.size === 0 ? "passed" : "failed",
       expectedCode: "stale_plan",
-      httpStatus: apply.status,
+      httpStatus: exported.status,
       mutating: false,
-      detail: `stale_plan status=${apply.status}; bots=${stub.botCount()}`,
+      detail: `stale_plan status=${exported.status}; artifacts=${artifacts.store.size}`,
     });
     catalog.close();
   }
 
   {
     const stub = new BotmancersAcceptanceStub();
+    const artifacts = new MemoryArtifactSink();
     const catalog = new SqliteCatalogRepository(input.catalogPath);
     const adapter = await createFixtureGrokAdapter("happy");
-    const handlers = createV1Handlers(new MarketService({
+    const handlers = createV1Handlers(exportMarket({
       catalog,
       evidence: input.evidence,
-      source: () => adapter,
-      botmancers: stub.client(),
+      adapter,
+      stub,
+      artifacts,
       now: input.now,
     }));
     const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
@@ -344,19 +342,66 @@ async function runFailureCases(input: {
       reviewedAt: previewBody.plan.createdAt,
       approved: true,
     };
-    const first = await handlers.apply({ params: identity, body });
-    const second = await handlers.apply({ params: identity, body });
-    const firstBody = first.body as ApplyBody;
-    const secondBody = second.body as ApplyBody;
-    const sameBot = firstBody.result?.targetReference === secondBody.result?.targetReference;
-    const sameOperation = firstBody.operation?.operationId === secondBody.operation?.operationId;
+    const exported = await handlers.exportArtifact({ params: identity, body });
+    const exportBody = exported.body as ExportBody;
+    const stored = artifacts.store.get(exportBody.identity);
+    stored?.set("botmancers/import.json", `${stored.get("botmancers/import.json") ?? ""} `);
+    const verified = await handlers.verifyArtifact({
+      params: identity,
+      body: {
+        policy: POLICY,
+        planDigest: previewBody.plan.id,
+        reviewedAt: previewBody.plan.createdAt,
+        artifactIdentity: exportBody.identity,
+      },
+    });
+    const verification = verified.body as { status?: string; checks?: Array<{ name: string; passed: boolean }> };
+    const namedBoundary = verification.checks?.some((check) => !check.passed && (check.name === "artifact-digest" || check.name === "artifact-content")) === true;
+    cases.push({
+      id: "tampered_artifact",
+      status: exported.status === 200 && verified.status === 200 && verification.status === "failed" && namedBoundary ? "passed" : "failed",
+      expectedCode: "tampered_artifact",
+      httpStatus: verified.status,
+      mutating: false,
+      detail: `verification status=${verification.status}; boundary=${namedBoundary ? "artifact-digest" : "missing"}`,
+    });
+    catalog.close();
+  }
+
+  {
+    const stub = new BotmancersAcceptanceStub();
+    const artifacts = new MemoryArtifactSink();
+    const catalog = new SqliteCatalogRepository(input.catalogPath);
+    const adapter = await createFixtureGrokAdapter("happy");
+    const handlers = createV1Handlers(exportMarket({
+      catalog,
+      evidence: input.evidence,
+      adapter,
+      stub,
+      artifacts,
+      now: input.now,
+    }));
+    const preview = await handlers.preview({ params: identity, body: { policy: POLICY } });
+    const previewBody = preview.body as { plan: { id: string; createdAt: string } };
+    const body = {
+      policy: POLICY,
+      planDigest: previewBody.plan.id,
+      reviewedAt: previewBody.plan.createdAt,
+      approved: true,
+    };
+    const first = await handlers.exportArtifact({ params: identity, body });
+    const second = await handlers.exportArtifact({ params: identity, body });
+    const firstBody = first.body as ExportBody;
+    const secondBody = second.body as ExportBody;
+    const sameIdentity = firstBody.identity === secondBody.identity;
+    const sameDigest = firstBody.digest === secondBody.digest;
     cases.push({
       id: "idempotent_retry",
-      status: first.status === 200 && second.status === 200 && stub.botCount() === 1 && sameBot && sameOperation ? "passed" : "failed",
-      expectedCode: "idempotent_apply",
+      status: first.status === 200 && second.status === 200 && artifacts.store.size === 1 && sameIdentity && sameDigest && secondBody.created === false ? "passed" : "failed",
+      expectedCode: "idempotent_export",
       httpStatus: second.status,
       mutating: false,
-      detail: `bots=${stub.botCount()} first=${firstBody.result?.targetReference} second=${secondBody.result?.targetReference} operation=${firstBody.operation?.operationId}`,
+      detail: `artifacts=${artifacts.store.size} first=${firstBody.identity} second=${secondBody.identity} digest=${firstBody.digest}`,
     });
     catalog.close();
   }
@@ -364,16 +409,14 @@ async function runFailureCases(input: {
   return cases;
 }
 
-async function previewAndApply(input: {
+async function previewAndExport(input: {
   handlers: ReturnType<typeof createV1Handlers>;
   source: SourceIdentity;
-  uiBaseUrl: string;
   replay: boolean;
-  listBots?: () => Promise<{ id: string }[]>;
 }): Promise<{
   compatibility: NonNullable<V0AcceptanceReport["compatibility"]>;
   approval: NonNullable<V0AcceptanceReport["approval"]>;
-  target: NonNullable<V0AcceptanceReport["target"]>;
+  artifact: NonNullable<V0AcceptanceReport["artifact"]>;
 }> {
   const identity = params(input.source);
   const preview = await input.handlers.preview({ params: identity, body: { policy: POLICY } });
@@ -382,46 +425,31 @@ async function previewAndApply(input: {
     plan: { id: string; createdAt: string };
     compatibility: { summary: NonNullable<V0AcceptanceReport["compatibility"]>["summary"] };
   };
-  const applyBodyPayload = {
+  const exportBodyPayload = {
     policy: POLICY,
     planDigest: previewBody.plan.id,
     reviewedAt: previewBody.plan.createdAt,
     approved: true,
   };
-  const apply = await input.handlers.apply({ params: identity, body: applyBodyPayload });
-  if (apply.status !== 200) responseError(apply, "apply_failed");
-  const applyBody = apply.body as ApplyBody;
-  if (applyBody.verification?.status !== "passed") {
-    throw new AcceptanceFailure("verification_failed", `Verification did not pass: ${JSON.stringify(applyBody.verification ?? applyBody)}`);
+  const exported = await input.handlers.exportArtifact({ params: identity, body: exportBodyPayload });
+  if (exported.status !== 200) responseError(exported, "export_failed");
+  const exportBody = exported.body as ExportBody & { verification: NonNullable<V0AcceptanceReport["artifact"]>["verification"] };
+  if (exportBody.verification?.status !== "passed") {
+    throw new AcceptanceFailure("verification_failed", `Artifact verification did not pass: ${JSON.stringify(exportBody.verification ?? exportBody)}`);
   }
-  let replaySameBot: boolean | undefined;
-  let replayBotCount: number | undefined;
+  let replaySameDigest: boolean | undefined;
+  let replayDuplicate: boolean | undefined;
   if (input.replay) {
-    const afterApply = input.listBots === undefined ? undefined : await input.listBots();
-    const replayed = await input.handlers.apply({ params: identity, body: applyBodyPayload });
-    if (replayed.status !== 200) responseError(replayed, "apply_failed");
-    const replayBody = replayed.body as ApplyBody;
-    replaySameBot = replayBody.result?.targetReference === applyBody.result.targetReference
-      && replayBody.operation?.operationId === applyBody.operation.operationId;
-    if (replaySameBot !== true) {
+    const replayed = await input.handlers.exportArtifact({ params: identity, body: exportBodyPayload });
+    if (replayed.status !== 200) responseError(replayed, "export_failed");
+    const replayBody = replayed.body as ExportBody;
+    replaySameDigest = replayBody.digest === exportBody.digest && replayBody.identity === exportBody.identity;
+    replayDuplicate = replayBody.created === true;
+    if (replaySameDigest !== true || replayDuplicate) {
       throw new AcceptanceFailure(
-        "duplicate_bot",
-        `Replaying ${applyBody.operation.operationId} created ${replayBody.result?.targetReference} instead of ${applyBody.result.targetReference}`,
+        "duplicate_artifact",
+        `Replaying export ${exportBody.identity} produced identity ${replayBody.identity} digest ${replayBody.digest} created=${replayBody.created}`,
       );
-    }
-    if (input.listBots !== undefined) {
-      const afterReplay = await input.listBots();
-      const botId = applyBody.result.targetReference;
-      const listedAfterApply = afterApply ?? [];
-      const applyMatches = listedAfterApply.filter((bot) => bot.id === botId).length;
-      const replayMatches = afterReplay.filter((bot) => bot.id === botId).length;
-      if (afterReplay.length !== listedAfterApply.length || applyMatches !== 1 || replayMatches !== 1) {
-        throw new AcceptanceFailure(
-          "duplicate_bot",
-          `Replaying ${applyBody.operation.operationId} changed Botmancers bot count from ${listedAfterApply.length} to ${afterReplay.length} (id ${botId} seen ${replayMatches} times)`,
-        );
-      }
-      replayBotCount = afterReplay.length;
     }
   }
   return {
@@ -434,13 +462,13 @@ async function previewAndApply(input: {
       reviewedAt: previewBody.plan.createdAt,
       planDigest: previewBody.plan.id,
     },
-    target: {
-      operationId: applyBody.operation.operationId,
-      botmancersBotId: applyBody.result.targetReference,
-      verification: applyBody.verification!,
-      returnUrl: botmancersBotUrl(input.uiBaseUrl, applyBody.result.targetReference),
-      ...(replaySameBot === undefined ? {} : { replaySameBot }),
-      ...(replayBotCount === undefined ? {} : { replayBotCount }),
+    artifact: {
+      identity: exportBody.identity,
+      path: exportBody.path,
+      digest: exportBody.digest,
+      verification: exportBody.verification,
+      ...(replaySameDigest === undefined ? {} : { replaySameDigest }),
+      ...(replayDuplicate === undefined ? {} : { replayDuplicate }),
     },
   };
 }
@@ -457,7 +485,6 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
   const mode = options.mode ?? "fixture";
   const now = options.now ?? (() => ACCEPTANCE_NOW);
   const generatedAt = now();
-  const uiBaseUrl = options.botmancersUiBaseUrl ?? process.env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL ?? "http://127.0.0.1:3100/";
   const sourceIdentity = options.source
     ?? parseSource(process.env.CLONE_MARKET_ACCEPTANCE_TEMPLATE, CHOSEN_SOURCE);
   const work = mkdtempSync(join(tmpdir(), "clone-market-v0-"));
@@ -470,6 +497,9 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
   const evidencePath = persistOperatorDbs
     ? optionalResolvedPath(options.evidencePath ?? process.env.CLONE_MARKET_EVIDENCE_DB)
     : fixtureEvidencePath;
+  const artifactDir = persistOperatorDbs
+    ? optionalResolvedPath(options.artifactDir ?? process.env.CLONE_MARKET_ARTIFACT_DIR ?? "./data/artifacts")!
+    : join(work, "artifacts");
   let closeEvidence: (() => void) | undefined;
   let closeFailureEvidence: (() => void) | undefined;
   let closeCatalog: (() => void) | undefined;
@@ -492,7 +522,7 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
     reconciliation: emptyReconciliation(),
     browser: {
       status: "operator_required",
-      notes: "Record catalog → inspector → preview → apply → verify plus Botmancers return in a real browser; see docs/acceptance-v0.md ([operator]).",
+      notes: "Record catalog → inspector → preview → artifact export → offline verification in a real browser; Botmancers apply/return is unsupported in V0. See docs/acceptance-v0.md ([operator]).",
     },
     failureCases: [],
     peerRepositories: {
@@ -500,7 +530,7 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         status: "skipped",
         returnRouteConfirmed: false,
         idempotencyKeyConfirmed: false,
-        detail: "Peer verification not requested for this run.",
+        detail: "Peer verification is outside V0 acceptance and is not requested for this run.",
       },
     },
   };
@@ -534,6 +564,10 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       evidence = seeded.service;
     }
 
+    mkdirSync(artifactDir, { recursive: true });
+    const artifacts = new FileArtifactSink(artifactDir);
+    const capabilityStub = new BotmancersAcceptanceStub();
+
     if (mode === "fixture") {
       const reconciliationReport = await reconcileFixtureCatalog(catalogPath!);
       const catalog = new SqliteCatalogRepository(catalogPath!);
@@ -555,11 +589,12 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       };
       const catalogRepo = new SqliteCatalogRepository(catalogPath!);
       closeCatalog = () => catalogRepo.close();
-      const handlers = createV1Handlers(new MarketService({
+      const handlers = createV1Handlers(exportMarket({
         catalog: catalogRepo,
         evidence,
-        source: () => adapter,
-        botmancers: new BotmancersAcceptanceStub().client(),
+        adapter,
+        stub: capabilityStub,
+        artifacts,
         now,
       }));
       const catalogResponse = await handlers.catalog();
@@ -567,25 +602,15 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       const catalogBody = catalogResponse.body as { total: number; items: CatalogItem[] };
       if (catalogBody.total < 1) throw new AcceptanceFailure("catalog_empty", "Catalog traversal returned zero templates");
       report.evidence = await inspectDisplayedLabels(handlers, catalogBody.items, sourceIdentity);
-      const stub = new BotmancersAcceptanceStub();
-      const applyHandlers = createV1Handlers(new MarketService({
-        catalog: catalogRepo,
-        evidence,
-        source: () => adapter,
-        botmancers: stub.client(),
-        now,
-      }));
-      const previewCheck = await applyHandlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
+      const previewCheck = await handlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
       if (previewCheck.status !== 200) responseError(previewCheck, "preview_failed");
-      if (stub.botCount() !== 0) throw new AcceptanceFailure("preview_mutated_target", "Preview mutated Botmancers");
-      const applied = await previewAndApply({
-        handlers: applyHandlers,
+      if (capabilityStub.botCount() !== 0) throw new AcceptanceFailure("preview_mutated_target", "Preview mutated Botmancers");
+      const exported = await previewAndExport({
+        handlers,
         source: sourceIdentity,
-        uiBaseUrl,
         replay: true,
-        listBots: async () => stub.client().listBots(),
       });
-      const detail = await applyHandlers.detail({ params: params(sourceIdentity) });
+      const detail = await handlers.detail({ params: params(sourceIdentity) });
       const detailBody = detail.body as { manifest: { provenanceUrl: string; retrievedAt: string; template: { name: string } } };
       report.template = {
         source: sourceIdentity,
@@ -593,12 +618,11 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         retrievedAt: detailBody.manifest.retrievedAt,
         name: detailBody.manifest.template.name,
       };
-      report.compatibility = applied.compatibility;
-      report.approval = applied.approval;
-      report.target = applied.target;
+      report.compatibility = exported.compatibility;
+      report.approval = exported.approval;
+      report.artifact = exported.artifact;
     } else {
       const grokBaseUrl = options.grokBaseUrl ?? process.env.CLONE_MARKET_GROK_BASE_URL ?? "https://x.ai/bot/marketplace/";
-      const botmancersBaseUrl = options.botmancersBaseUrl ?? process.env.CLONE_MARKET_BOTMANCERS_BASE_URL ?? "http://127.0.0.1:8787/";
       const adapter = new GrokMarketplaceAdapter({ baseUrl: grokBaseUrl, now });
       const { runCatalogReconciliation } = await import("@clone-market/catalog");
       const reconciliationReport = await runCatalogReconciliation({
@@ -635,12 +659,12 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         retrievedAt: entry.provenance.retrievedAt,
         name: entry.name,
       };
-      const client = new BotmancersHttpClient({ baseUrl: botmancersBaseUrl, maxRetries: 0 });
-      const handlers = createV1Handlers(new MarketService({
+      const handlers = createV1Handlers(exportMarket({
         catalog,
         evidence: evidence!,
-        source: () => adapter,
-        botmancers: client,
+        adapter,
+        stub: capabilityStub,
+        artifacts,
         now,
       }));
       const catalogResponse = await handlers.catalog();
@@ -664,16 +688,14 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
       );
       const preview = await handlers.preview({ params: params(sourceIdentity), body: { policy: POLICY } });
       if (preview.status !== 200) responseError(preview, "preview_failed");
-      const applied = await previewAndApply({
+      const exported = await previewAndExport({
         handlers,
         source: sourceIdentity,
-        uiBaseUrl,
         replay: true,
-        listBots: async () => client.listBots(),
       });
-      report.compatibility = applied.compatibility;
-      report.approval = applied.approval;
-      report.target = applied.target;
+      report.compatibility = exported.compatibility;
+      report.approval = exported.approval;
+      report.artifact = exported.artifact;
     }
 
     await reconcileFixtureCatalog(failureCatalogPath);
@@ -697,13 +719,13 @@ export async function runV0Acceptance(options: RunV0AcceptanceOptions = {}): Pro
         status: "skipped",
         returnRouteConfirmed: false,
         idempotencyKeyConfirmed: false,
-        detail: "Peer Botmancers verification is opt-in via CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 and BOTMANCERS_ROOT.",
+        detail: "Peer Botmancers verification is outside V0 acceptance. Opt in only with CLONE_MARKET_ACCEPTANCE_PEER_REPOS=1 and BOTMANCERS_ROOT.",
       };
 
     const statuses: Array<"passed" | "failed"> = [
       report.reconciliation.unexplainedOmissions.length === 0 ? "passed" : "failed",
       report.evidence?.usesInstallCount === false && report.evidence?.usesPrivateUsage === false ? "passed" : "failed",
-      report.target?.verification.status === "passed" && report.target.replaySameBot === true ? "passed" : "failed",
+      report.artifact?.verification.status === "passed" && report.artifact.replaySameDigest === true && report.artifact.replayDuplicate === false ? "passed" : "failed",
       ...report.failureCases.map((item) => item.status),
     ];
     if (verifyPeer) {

@@ -3,19 +3,17 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { botmancersBotUrl } from "../botmancers-url.js";
 import { CHOSEN_SOURCE } from "./fixtures.js";
 import { adoptionLabelFlags } from "./label-guards.js";
 import { runV0Acceptance } from "./run.js";
 
 describe("V0 acceptance harness [agent]", () => {
-  it("proves fixture catalog reconciliation, evidence labels, apply/verify, and failure paths without network", async () => {
+    it("proves fixture catalog reconciliation, evidence labels, export/verify, and failure paths without network", async () => {
     mkdirSync(join(process.cwd(), ".temporal/logs"), { recursive: true });
     const reportPath = join(process.cwd(), ".temporal/logs/v0-acceptance-fixture-test.json");
     const report = await runV0Acceptance({
       mode: "fixture",
       reportPath,
-      botmancersUiBaseUrl: "http://127.0.0.1:3100/",
       verifyPeerRepos: false,
     });
 
@@ -39,20 +37,21 @@ describe("V0 acceptance harness [agent]", () => {
     expect(report.compatibility?.planDigest.startsWith("sha256:")).toBe(true);
     expect(report.approval?.approved).toBe(true);
     expect(report.approval?.planDigest).toBe(report.compatibility?.planDigest);
-    expect(report.target?.operationId.startsWith("apply-")).toBe(true);
-    expect(report.target?.botmancersBotId).toMatch(/^bot-/);
-    expect(report.target?.verification.status).toBe("passed");
-    expect(report.target?.replaySameBot).toBe(true);
-    expect(report.target?.replayBotCount).toBe(1);
-    expect(report.target?.returnUrl).toBe(botmancersBotUrl("http://127.0.0.1:3100/", report.target!.botmancersBotId));
+    expect(report.artifact?.identity.startsWith("export-")).toBe(true);
+    expect(report.artifact?.path).toBe("botmancers/import.json");
+    expect(report.artifact?.digest.startsWith("sha256:")).toBe(true);
+    expect(report.artifact?.verification.status).toBe("passed");
+    expect(report.artifact?.replaySameDigest).toBe(true);
+    expect(report.artifact?.replayDuplicate).toBe(false);
 
     const byId = Object.fromEntries(report.failureCases.map((item) => [item.id, item]));
     expect(byId.source_schema_drift).toMatchObject({ status: "passed", expectedCode: "source_drift", mutating: false, httpStatus: 503 });
-    expect(byId.botmancers_unavailable).toMatchObject({ status: "passed", expectedCode: "target_unavailable", mutating: false, httpStatus: 503 });
-    expect(byId.botmancers_unavailable_apply).toMatchObject({ status: "passed", expectedCode: "target_unavailable", mutating: false, httpStatus: 503 });
+    expect(byId.artifact_sink_unavailable).toMatchObject({ status: "passed", expectedCode: "sink_unavailable", mutating: false, httpStatus: 503 });
     expect(byId.changed_plan_after_preview).toMatchObject({ status: "passed", expectedCode: "stale_plan", mutating: false, httpStatus: 409 });
+    expect(byId.tampered_artifact).toMatchObject({ status: "passed", expectedCode: "tampered_artifact", mutating: false });
+    expect(byId.tampered_artifact?.detail).toContain("artifact-digest");
     expect(byId.idempotent_retry).toMatchObject({ status: "passed", mutating: false });
-    expect(byId.idempotent_retry?.detail).toContain("bots=1");
+    expect(byId.idempotent_retry?.detail).toContain("artifacts=1");
 
     expect(report.browser.status).toBe("operator_required");
     expect(report.peerRepositories.botmancers.status).toBe("skipped");
