@@ -1,0 +1,22 @@
+{
+  "ticket": "NOT-351",
+  "generatedAt": "2026-10-03T12:00:00.000Z",
+  "flow": [
+    "catalog",
+    "inspector",
+    "preview",
+    "apply",
+    "verify"
+  ],
+  "statuses": {
+    "detail": 200,
+    "preview": 200,
+    "apply": 200,
+    "verify": 200
+  },
+  "unsupportedBeforeApproval": [
+    "unsupported-crm"
+  ],
+  "verification": "passed",
+  "planDigest": "sha256:7dfee00999372762b279aefe848aa032a676b09b388ba0def0496957995281d2"
+}

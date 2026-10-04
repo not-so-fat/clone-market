@@ -39,8 +39,8 @@ export function createV1Handlers(market: MarketService) {
     catalog: (request: ApiRequest = {}) => response(() => market.catalog(request.query as CatalogFilters)),
     detail: (request: ApiRequest) => response(() => market.detail(source(request))),
     evidence: (request: ApiRequest) => response(async () => {
-      const detail = await market.detail(source(request));
-      return detail.evidence ?? { snapshot: undefined, countedEvidenceIds: [], contributions: [], evidence: [] };
+      const evidence = await market.evidence(source(request));
+      return evidence ?? { snapshot: undefined, countedEvidenceIds: [], contributions: [], evidence: [] };
     }),
     preview: (request: ApiRequest) => response(async () => {
       const body = reviewBody(request);

@@ -1,12 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { rmSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AdoptionSnapshot, BotTemplateManifest, CatalogEntry, CatalogRepository, SourceAdapter } from "@clone-market/core";
-import type { AdoptionEvidenceQuery, StoredEvidence } from "@clone-market/evidence";
+import { SqliteCatalogRepository } from "@clone-market/catalog";
+import { EvidenceService, SqliteEvidenceRepository, type AdoptionEvidenceQuery, type StoredEvidence } from "@clone-market/evidence";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
 import { MarketService, type ReviewResponse } from "./market.js";
 import { createV1Handlers } from "./http.js";
 import { renderCatalog, renderEvidence, renderReview } from "./presentation.js";
 
 const NOW = "2026-10-03T12:00:00.000Z";
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 const source = { provider: "grok-marketplace", externalId: "template-1" };
 const entry: CatalogEntry = {
   schemaVersion: "1.0.0", id: "template-1", name: "Signal Scout", summary: "Finds useful signals.", creator: { name: "Ada" }, categories: ["research"], firstSeenAt: NOW, lastSeenAt: NOW, featured: true,
@@ -55,7 +67,7 @@ function evidence(label: AdoptionSnapshot["label"]): AdoptionEvidenceQuery {
   return { snapshot: snapshot(label), countedEvidenceIds: [row.id], contributions: [{ rule: "reviewed_evidence", passed: true, count: 1, threshold: 1, evidenceIds: [row.id], explanation: "Exact contributing row." }], evidence: [row] };
 }
 
-type ClientState = { posts: number; payload?: unknown; fail?: boolean; failImports?: boolean };
+type ClientState = { posts: number; payload?: unknown; fail?: boolean; failImports?: boolean; idempotencyKeys?: string[] };
 
 function client(state: ClientState) {
   return new BotmancersHttpClient({ maxRetries: 0, fetch: async (url, init) => {
@@ -64,6 +76,7 @@ function client(state: ClientState) {
     if (init.method === "POST") {
       if (state.failImports) throw new Error("target import failed");
       state.posts += 1;
+      state.idempotencyKeys?.push(init.headers["idempotency-key"]!);
       state.payload = JSON.parse(init.body ?? "null");
       return { ok: true, status: 200, async json() { return { id: "bot-1" }; } };
     }
@@ -96,6 +109,64 @@ describe("catalog and inspector", () => {
     expect(detail.manifest.id).toBe("manifest-1");
     expect(context.repo.writes).toEqual([]);
     expect(JSON.stringify(await context.repo.getTemplate(source))).toBe(before);
+  });
+
+  it("keeps live capability-filter drift isolated to the affected template", async () => {
+    const second = { ...entry, id: "template-2", name: "Drifted template", provenance: { ...entry.provenance, source: { ...source, externalId: "template-2" } } };
+    const sourceAdapter = adapter({
+      async fetchTemplate(identity) {
+        if (identity.externalId === "template-2") throw new Error("detail schema changed");
+        return { identity };
+      },
+    });
+    const { market } = service({ repo: repository([entry, second]), sourceAdapter });
+    const result = await market.catalog({ capability: "instructions" });
+    expect(result.items.map(({ id }) => id)).toEqual([entry.id]);
+    expect(result.filterWarnings).toEqual([{ source: second.provenance.source, code: "source_drift", message: "detail schema changed" }]);
+  });
+
+  it("serves stored evidence without fetching the live Grok manifest", async () => {
+    const sourceAdapter = adapter({ async fetchTemplate() { throw new Error("Grok offline"); } });
+    const context = service({ sourceAdapter, evidence: evidence("discussed") });
+    const response = await createV1Handlers(context.market).evidence({ params: { provider: source.provider, externalId: source.externalId } });
+    expect(response.status).toBe(200);
+    expect((response.body as AdoptionEvidenceQuery).snapshot.label).toBe("discussed");
+    expect(sourceAdapter.calls).toEqual([]);
+  });
+
+  it("does not persist request-scoped manifest content in either real SQLite database", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "clone-market-web-boundary-"));
+    temporaryDirectories.push(directory);
+    const catalogPath = join(directory, "catalog.sqlite");
+    const evidencePath = join(directory, "evidence.sqlite");
+    const catalog = new SqliteCatalogRepository(catalogPath);
+    await catalog.reconcile({ source: source.provider, retrievedAt: NOW, records: [{ template: {
+      schemaVersion: entry.schemaVersion, id: entry.id, name: entry.name, summary: entry.summary,
+      creator: entry.creator, categories: entry.categories, firstSeenAt: entry.firstSeenAt,
+      lastSeenAt: entry.lastSeenAt, featured: entry.featured, provenance: entry.provenance,
+    }, sourceMetadata: entry.sourceMetadata }] });
+    const evidenceRepository = new SqliteEvidenceRepository(evidencePath);
+    const state = { posts: 0 };
+    const market = new MarketService({ catalog, evidence: new EvidenceService(evidenceRepository), source() { return adapter(); }, botmancers: client(state), now: () => NOW });
+    const handlers = createV1Handlers(market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    expect((await handlers.detail({ params })).status).toBe(200);
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    expect((await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } })).status).toBe(200);
+    catalog.close();
+    evidenceRepository.close();
+
+    for (const path of [catalogPath, evidencePath]) {
+      const database = new DatabaseSync(path, { readOnly: true });
+      const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>;
+      const persisted = tables.flatMap(({ name }) => database.prepare(`SELECT * FROM ${name}`).all());
+      const serialized = JSON.stringify(persisted);
+      for (const requestScopedValue of [manifest.id, manifest.instructions, manifest.memories[0]!.content, manifest.integrations[0]!.id]) {
+        expect(serialized).not.toContain(requestScopedValue);
+      }
+      database.close();
+    }
   });
 
   it.each(["listed", "discussed", "emerging", "observed_use"] as const)("opens %s to its exact evidence rows and rule contributions", (label) => {
@@ -150,6 +221,20 @@ describe("reviewed clone routes", () => {
     const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } });
     expect(applied.status).toBe(200);
     expect(context.state.posts).toBe(1);
+  });
+
+  it("reuses a deterministic Botmancers idempotency key for an approved-plan retry", async () => {
+    const state: ClientState = { posts: 0, idempotencyKeys: [] };
+    const context = service({ state });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    const body = { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true };
+    expect((await handlers.apply({ params, body })).status).toBe(200);
+    expect((await handlers.apply({ params, body })).status).toBe(200);
+    expect(state.idempotencyKeys).toHaveLength(2);
+    expect(new Set(state.idempotencyKeys).size).toBe(1);
   });
 
   it("renders exact, compatible, partial, unavailable, and unsafe review rows", async () => {

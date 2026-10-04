@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { SCHEMA_VERSION, type Evidence, type EvidenceType } from "@clone-market/core";
 import { describe, expect, it } from "vitest";
 
-import { deriveAdoptionSnapshot } from "./classifier.js";
+import { classifyEvidenceFreshness, deriveAdoptionSnapshot } from "./classifier.js";
 import type { StoredEvidence } from "./types.js";
 
 const calculatedAt = "2026-10-03T12:00:00.000Z";
@@ -41,6 +41,12 @@ function evidence(
 }
 
 describe("deterministic adoption classification", () => {
+  it("owns the public-evidence freshness policy", () => {
+    const current = deriveAdoptionSnapshot("template-1", [], { calculatedAt }).snapshot;
+    expect(classifyEvidenceFreshness(undefined, calculatedAt)).toBe("missing");
+    expect(classifyEvidenceFreshness(current, "2026-11-01T12:00:00.000Z")).toBe("fresh");
+    expect(classifyEvidenceFreshness(current, "2026-11-03T12:00:00.001Z")).toBe("stale");
+  });
   it.each([
     ["one promotion", [evidence("promo-1", "creator_promo", "creator")]],
     ["many promotions", [1, 2, 3, 4].map((number) => evidence(`promo-${number}`, "creator_promo", "creator"))],

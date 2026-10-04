@@ -41,7 +41,16 @@ export function CloneReview({ provider, externalId }: { provider: string; extern
     try {
       const applied = await call("apply", { policy, planDigest: review.plan.id, reviewedAt, approved });
       setResult({ applied });
-      const verification = await call("verify", { policy, planDigest: review.plan.id, reviewedAt, targetReference: applied.result.targetReference });
+      await verify(applied);
+    } catch (reason) {
+      setError(requestError(reason));
+    }
+  }
+  async function verify(applied = result?.applied) {
+    if (!applied) return;
+    setError(undefined);
+    try {
+      const verification = await call("verify", { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, targetReference: applied.result.targetReference });
       setResult({ applied, verification });
     } catch (reason) {
       setError(requestError(reason));
