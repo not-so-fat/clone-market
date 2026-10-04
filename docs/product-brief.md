@@ -1,10 +1,14 @@
 # Clone Market product brief
 
-**Status:** Draft for product alignment
+**Status:** V0 implementation assembled; offline acceptance harness proven; live operator proof pending
 
 **Updated:** 2026-10-03
 
 **Decision:** Build a complete, source-linked index of public Grok Bot templates, progressively enrich every template with public adoption evidence, and support private compatibility-aware imports without republishing creators' configurations.
+
+**Proven offline (fixture / stub):** complete captured Marketplace reconciliation without a hard-coded catalog cap; evidence-backed adoption labels with inspectable contributions; reviewed Botmancers preview → explicit approval → apply → read-after-write verification; idempotent target-operation replay; typed non-mutating failures for source drift, Botmancers unavailability, and changed plan digests. See `docs/acceptance-v0.md` and `npm run smoke:v0`.
+
+**Still operator / external:** live Marketplace traversal against today’s public HTML/RSC surface; browser recording of catalog → inspector → preview → apply → verify plus Botmancers return; continuous freshness of public evidence rows.
 
 ## Value
 
@@ -165,9 +169,19 @@ V0 proves the end-to-end contract, not merely scraping:
 2. Fetch and normalize any public template detail page on demand.
 3. Detect source-schema drift and fail visibly.
 4. Display Featured placement and evidence-backed adoption labels without claiming private usage.
-5. Produce a private Botmancer-compatible import preview and versioned artifact for one template.
+5. Produce a private Botmancers-compatible import preview and versioned artifact for one template.
 6. Identify missing integrations, memories, routines, and target-runtime behavior.
-7. Verify the generated artifact without executing imported instructions or requiring the Botmancer product.
+7. Verify the generated artifact without executing imported instructions against real credentials.
+
+Offline fixture acceptance covers items 1–7 against captured Marketplace HTML and an in-process Botmancers stub. Live Marketplace + local Botmancers proof is the operator sequence in `docs/acceptance-v0.md`.
+
+### Remaining unsupported components and external uncertainties
+
+- Skills, routines, and integrations that Botmancers marks unsupported remain unavailable omissions (not silently rewritten).
+- Marketplace `installCount` remains all-zero in observed public payloads and is never used for adoption labels.
+- Public Grok schema may drift without notice; drift fails visibly rather than guessing.
+- Agent Deck and coding-agent targets are out of V0 scope.
+- Live Botmancers API/UI availability and auth are external to Clone Market.
 
 ## Negative space
 
@@ -187,7 +201,7 @@ V0 will not:
 | Which source fields may be stored centrally? | Store source-linked catalog metadata; fetch full configuration only for a private, user-initiated import. | Terms and legal review of the proposed schema. |
 | Manual research or X API for adoption evidence? | Begin with manually reviewed exact-link/name searches and preserve evidence rows. | Review precision, coverage, and cost after the first 100 evidence rows. |
 | Source-specific or format-first package boundary? | Implement a versioned manifest plus a Grok adapter, even if they initially share one repository. | A second source adapter or first incompatible Grok schema change forces the seam. |
-| First clone target? | A Botmancer-compatible artifact first; keep consumer application behind a separate integration boundary. | One successful preview, artifact export, and offline verification; live Botmancer integration is tracked separately. |
+| First clone target? | A Botmancers-compatible artifact and local import path first; keep broader consumer hosting behind a separate boundary. | Offline V0 acceptance green; live operator proof recorded per `docs/acceptance-v0.md`. |
 
 ## Success measures
 
