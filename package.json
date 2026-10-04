@@ -20,7 +20,9 @@
     "build:web": "npm run build --workspace=@clone-market/web",
     "test": "npm run build && vitest run",
     "lint": "node scripts/check-boundaries.mjs && node scripts/check-web-boundaries.mjs && tsc -p tsconfig.lint.json --pretty false",
-    "test:web": "vitest run apps/web"
+    "test:web": "vitest run apps/web",
+    "smoke:v0": "npm run build && vitest run apps/web/src/acceptance && vite-node apps/web/src/acceptance/cli.ts",
+    "smoke:v0:live": "npm run build && CLONE_MARKET_ACCEPTANCE_LIVE=1 vite-node apps/web/src/acceptance/cli.ts --live"
   },
   "devDependencies": {
     "@types/node": "20.19.11",
