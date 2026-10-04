@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`BotmancersTargetAdapter > previews every component without making a mutating request and snapshots the proposed payload 1`] = `
+[
+  {
+    "content": "[{"classification":"exact","componentId":"manifest.instructions","componentType":"instructions","rationaleCode":"instruction_form_exact","translated":true},{"classification":"unavailable","componentId":"memory-1","componentType":"memory","rationaleCode":"memory_unsupported","translated":false},{"classification":"unavailable","componentId":"skill-1","componentType":"skill","rationaleCode":"skill_unsupported","translated":false},{"classification":"unavailable","componentId":"routine-1","componentType":"routine","rationaleCode":"routine_unsupported","translated":false},{"classification":"unavailable","componentId":"calendar","componentType":"integration","rationaleCode":"integration_unsupported","translated":false}]",
+    "path": "botmancers/components.json",
+  },
+  {
+    "content": "{"bot":{"description":"Researches without executing imported instructions.","instructions":"Summarize sources and do not run tools.","name":"Careful Researcher"},"provenance":{"manifestId":"manifest-1","retrievedAt":"2026-10-03T12:00:00.000Z","reviewedPlanDigest":"sha256:7224b4e978ace907265df9a253f043a8ce49ffa82dd21d35c890fdd28fa9c12f","source":{"externalId":"source-1","provider":"fixture-source"},"url":"https://source.example/templates/1"},"schemaVersion":"1.0.0"}",
+    "path": "botmancers/import.json",
+  },
+]
+`;

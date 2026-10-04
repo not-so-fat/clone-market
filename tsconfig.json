@@ -6,6 +6,7 @@
     { "path": "packages/catalog" },
     { "path": "packages/evidence" },
     { "path": "packages/source-grok" },
+    { "path": "packages/target-botmancers" },
     { "path": "fixtures/consumer" }
   ]
 }
