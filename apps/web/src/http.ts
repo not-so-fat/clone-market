@@ -12,9 +12,14 @@ function source(request: ApiRequest): SourceIdentity {
   return { provider, externalId };
 }
 
-function reviewBody(request: ApiRequest): { policy: ClonePolicy; planDigest?: string; approved?: boolean; targetReference?: string } {
+function reviewBody(request: ApiRequest): { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string } {
   if (typeof request.body !== "object" || request.body === null) throw new TypeError("JSON body is required");
-  return request.body as { policy: ClonePolicy; planDigest?: string; approved?: boolean; targetReference?: string };
+  return request.body as { policy: ClonePolicy; planDigest?: string; reviewedAt?: string; approved?: boolean; targetReference?: string };
+}
+
+function required(value: string | undefined, name: string): string {
+  if (!value) throw new TypeError(`${name} is required`);
+  return value;
 }
 
 async function response(operation: () => Promise<unknown>): Promise<ApiResponse> {
@@ -37,17 +42,18 @@ export function createV1Handlers(market: MarketService) {
       const detail = await market.detail(source(request));
       return detail.evidence ?? { snapshot: undefined, countedEvidenceIds: [], contributions: [], evidence: [] };
     }),
-    preview: (request: ApiRequest) => response(() => {
+    preview: (request: ApiRequest) => response(async () => {
       const body = reviewBody(request);
-      return market.preview({ source: source(request), policy: body.policy });
+      const { manifest: _requestScopedManifest, ...review } = await market.preview({ source: source(request), policy: body.policy });
+      return review;
     }),
     apply: (request: ApiRequest) => response(() => {
       const body = reviewBody(request);
-      return market.apply({ source: source(request), policy: body.policy, planDigest: body.planDigest ?? "", approved: body.approved === true });
+      return market.apply({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), approved: body.approved === true });
     }),
     verify: (request: ApiRequest) => response(() => {
       const body = reviewBody(request);
-      return market.verify({ source: source(request), policy: body.policy, planDigest: body.planDigest ?? "", targetReference: body.targetReference ?? "" });
+      return market.verify({ source: source(request), policy: body.policy, planDigest: required(body.planDigest, "planDigest"), reviewedAt: required(body.reviewedAt, "reviewedAt"), targetReference: required(body.targetReference, "targetReference") });
     }),
   };
 }

@@ -2,4 +2,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 coverage/
+.next/
 .DS_Store

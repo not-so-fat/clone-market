@@ -33,6 +33,8 @@ export type Review = {
   preview: Awaited<ReturnType<BotmancersTargetAdapter["preview"]>>;
 };
 
+export type ReviewResponse = Omit<Review, "manifest">;
+
 type Dependencies = {
   catalog: CatalogRepository;
   evidence: Pick<EvidenceService, "getLatest">;
@@ -106,13 +108,13 @@ export class MarketService {
     return { items, total: items.length };
   }
 
-  async detail(source: SourceIdentity) {
+  async detail(source: SourceIdentity, retrievedAt = this.#now()) {
     const entry = await this.#deps.catalog.getTemplate(source);
     if (!entry) throw new MarketError("not_found", "Template is not in the catalog");
     try {
       const adapter = this.#deps.source(source.provider);
       const raw = await adapter.fetchTemplate(source);
-      const manifest = await adapter.normalizeTemplate(raw, this.#now());
+      const manifest = await adapter.normalizeTemplate(raw, retrievedAt);
       const history = await this.#deps.catalog.getSourceHistory(source);
       const evidence = await this.#deps.evidence.getLatest(entry.id);
       return { entry, history, manifest, evidence };
@@ -121,8 +123,8 @@ export class MarketService {
     }
   }
 
-  async #review(input: ReviewInput): Promise<Review> {
-    const { manifest } = await this.detail(input.source);
+  async #review(input: ReviewInput, reviewedAt = this.#now()): Promise<Review> {
+    const { manifest } = await this.detail(input.source, reviewedAt);
     let capabilities: TargetCapabilities;
     try {
       capabilities = await this.#deps.botmancers.getCapabilities();
@@ -133,7 +135,7 @@ export class MarketService {
     if (result.status !== "planned") throw new MarketError("unsafe_plan", `Unable to plan clone: ${result.status}`);
     const compatibility = result.plan;
     const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest, compatibilityPlan: compatibility, now: this.#now });
-    const draft = createBotmancersClonePlan({ manifest, compatibilityPlan: compatibility, createdAt: this.#now() });
+    const draft = createBotmancersClonePlan({ manifest, compatibilityPlan: compatibility, createdAt: reviewedAt });
     try {
       const preview = await target.preview(draft);
       return { manifest, compatibility, plan: withReviewedPlanDigest(draft, preview), preview };
@@ -146,22 +148,31 @@ export class MarketService {
     return this.#review(input);
   }
 
-  async apply(input: ReviewInput & { planDigest: string; approved: boolean }) {
+  async apply(input: ReviewInput & { planDigest: string; reviewedAt: string; approved: boolean }) {
     if (!input.approved) throw new MarketError("approval_required", "Explicit approval is required");
-    const review = await this.#review(input);
+    const review = await this.#review(input, input.reviewedAt);
     if (review.plan.id !== input.planDigest) throw new MarketError("stale_plan", "The source or target plan changed; review the new preview");
     if (review.compatibility.summary.unsafe > 0) throw new MarketError("unsafe_plan", "Unsafe components cannot be applied");
+    if (review.compatibility.summary.partial > 0) throw new MarketError("unsafe_plan", "Partial mappings must be resolved before apply");
     const operation = { operationId: randomUUID(), idempotencyKey: `${input.planDigest}:${randomUUID()}` };
     const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest: review.manifest, compatibilityPlan: review.compatibility, now: this.#now });
-    const result = await target.apply(review.plan, operation);
-    return { result, operation, planDigest: review.plan.id };
+    try {
+      const result = await target.apply(review.plan, operation);
+      return { result, operation, planDigest: review.plan.id };
+    } catch (error) {
+      throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers apply failed");
+    }
   }
 
-  async verify(input: ReviewInput & { planDigest: string; targetReference: string }): Promise<VerifyResult> {
-    const review = await this.#review(input);
+  async verify(input: ReviewInput & { planDigest: string; reviewedAt: string; targetReference: string }): Promise<VerifyResult> {
+    const review = await this.#review(input, input.reviewedAt);
     if (review.plan.id !== input.planDigest) throw new MarketError("stale_plan", "The reviewed plan changed before verification");
     const operation = { operationId: randomUUID(), idempotencyKey: `verify:${input.planDigest}:${input.targetReference}` };
     const target = new BotmancersTargetAdapter({ client: this.#deps.botmancers, manifest: review.manifest, compatibilityPlan: review.compatibility, now: this.#now });
-    return target.verify({ plan: review.plan, targetReference: input.targetReference }, operation);
+    try {
+      return await target.verify({ plan: review.plan, targetReference: input.targetReference }, operation);
+    } catch (error) {
+      throw new MarketError("target_unavailable", error instanceof Error ? error.message : "Botmancers verification failed");
+    }
   }
 }

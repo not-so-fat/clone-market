@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AdoptionSnapshot, BotTemplateManifest, CatalogEntry, CatalogRepository, SourceAdapter } from "@clone-market/core";
 import type { AdoptionEvidenceQuery, StoredEvidence } from "@clone-market/evidence";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
-import { MarketService } from "./market.js";
+import { MarketService, type ReviewResponse } from "./market.js";
 import { createV1Handlers } from "./http.js";
 import { renderCatalog, renderEvidence, renderReview } from "./presentation.js";
 
@@ -38,7 +38,10 @@ function adapter(overrides: Partial<SourceAdapter> = {}): SourceAdapter & { call
     source: "grok-marketplace", calls,
     async listTemplates() { return { templates: [entry] }; },
     async fetchTemplate() { calls.push("fetchTemplate"); return { private: "request-only" }; },
-    async normalizeTemplate() { calls.push("normalizeTemplate"); return manifest; },
+    async normalizeTemplate(_input, retrievedAt) {
+      calls.push("normalizeTemplate");
+      return { ...manifest, retrievedAt, template: { ...manifest.template, provenance: { ...manifest.template.provenance, retrievedAt } } };
+    },
     ...overrides,
   };
 }
@@ -52,20 +55,27 @@ function evidence(label: AdoptionSnapshot["label"]): AdoptionEvidenceQuery {
   return { snapshot: snapshot(label), countedEvidenceIds: [row.id], contributions: [{ rule: "reviewed_evidence", passed: true, count: 1, threshold: 1, evidenceIds: [row.id], explanation: "Exact contributing row." }], evidence: [row] };
 }
 
-function client(state: { posts: number; payload?: unknown; fail?: boolean }) {
+type ClientState = { posts: number; payload?: unknown; fail?: boolean; failImports?: boolean };
+
+function client(state: ClientState) {
   return new BotmancersHttpClient({ maxRetries: 0, fetch: async (url, init) => {
     if (state.fail) throw new Error("target offline");
     if (url.endsWith("/v1/capabilities")) return { ok: true, status: 200, async json() { return capabilities; } };
-    if (init.method === "POST") { state.posts += 1; state.payload = JSON.parse(init.body ?? "null"); return { ok: true, status: 200, async json() { return { id: "bot-1" }; } }; }
+    if (init.method === "POST") {
+      if (state.failImports) throw new Error("target import failed");
+      state.posts += 1;
+      state.payload = JSON.parse(init.body ?? "null");
+      return { ok: true, status: 200, async json() { return { id: "bot-1" }; } };
+    }
     return { ok: true, status: 200, async json() { return { id: "bot-1", payload: state.payload }; } };
   } });
 }
 
-function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: { posts: number; payload?: unknown; fail?: boolean }; evidence?: AdoptionEvidenceQuery } = {}) {
+function service(options: { repo?: ReturnType<typeof repository>; sourceAdapter?: ReturnType<typeof adapter>; state?: ClientState; evidence?: AdoptionEvidenceQuery; now?: () => string } = {}) {
   const repo = options.repo ?? repository();
   const sourceAdapter = options.sourceAdapter ?? adapter();
   const state = options.state ?? { posts: 0 };
-  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), now: () => NOW });
+  const market = new MarketService({ catalog: repo, evidence: { async getLatest() { return options.evidence; } }, source() { return sourceAdapter; }, botmancers: client(state), now: options.now ?? (() => NOW) });
   return { market, repo, sourceAdapter, state };
 }
 
@@ -94,6 +104,13 @@ describe("catalog and inspector", () => {
     expect(html).toContain('data-rule="reviewed_evidence"');
     expect(html).toContain("Exact contributing row.");
   });
+
+  it("links an adoption label to its evidence rows and shows the evidence-through timestamp", async () => {
+    const { market } = service({ evidence: evidence("observed_use") });
+    const html = renderCatalog((await market.catalog()).items);
+    expect(html).toContain('href="/templates/grok-marketplace/template-1#evidence"');
+    expect(html).toContain(`fresh · through ${NOW}`);
+  });
 });
 
 describe("reviewed clone routes", () => {
@@ -104,20 +121,64 @@ describe("reviewed clone routes", () => {
     const preview = await handlers.preview({ params, body: { policy } });
     expect(preview.status).toBe(200);
     expect(context.state.posts).toBe(0);
-    const review = preview.body as Awaited<ReturnType<MarketService["preview"]>>;
+    const review = preview.body as ReviewResponse;
+    expect(review).not.toHaveProperty("manifest");
     expect(renderReview(review)).toContain("unavailable");
-    const denied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, approved: false } });
+    const reviewedAt = review.plan.createdAt;
+    const denied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt, approved: false } });
     expect(denied.status).toBe(403);
     expect(context.state.posts).toBe(0);
-    const stale = await handlers.apply({ params, body: { policy, planDigest: "sha256:changed", approved: true } });
+    const stale = await handlers.apply({ params, body: { policy, planDigest: "sha256:changed", reviewedAt, approved: true } });
     expect(stale.status).toBe(409);
     expect(context.state.posts).toBe(0);
-    const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, approved: true } });
+    const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt, approved: true } });
     expect(applied.status).toBe(200);
     expect(context.state.posts).toBe(1);
-    const verified = await handlers.verify({ params, body: { policy, planDigest: review.plan.id, targetReference: "bot-1" } });
+    const verified = await handlers.verify({ params, body: { policy, planDigest: review.plan.id, reviewedAt, targetReference: "bot-1" } });
     expect(verified.status).toBe(200);
     expect((verified.body as { status: string }).status).toBe("passed");
+  });
+
+  it("keeps an unchanged reviewed digest applicable across later server clock ticks", async () => {
+    const times = [NOW, "2026-10-03T12:01:00.000Z", "2026-10-03T12:02:00.000Z"];
+    let index = 0;
+    const context = service({ now: () => times[Math.min(index++, times.length - 1)]! });
+    const handlers = createV1Handlers(context.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    const applied = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } });
+    expect(applied.status).toBe(200);
+    expect(context.state.posts).toBe(1);
+  });
+
+  it("renders exact, compatible, partial, unavailable, and unsafe review rows", async () => {
+    const context = service();
+    const response = await createV1Handlers(context.market).preview({ params: { provider: source.provider, externalId: source.externalId }, body: { policy } });
+    const review = response.body as ReviewResponse;
+    const classifications = ["exact", "compatible", "partial", "unavailable", "unsafe"] as const;
+    const html = renderReview({
+      ...review,
+      compatibility: {
+        ...review.compatibility,
+        assessments: classifications.map((classification, index) => ({
+          componentType: "integration" as const,
+          componentId: `component-${index}`,
+          classification,
+          rationaleCode: classification === "exact" ? "integration_exact" as const
+            : classification === "compatible" ? "integration_compatible" as const
+              : classification === "partial" ? "integration_partial" as const
+                : classification === "unavailable" ? "integration_unsupported" as const
+                  : "creator_permission_denied" as const,
+          requiredCapabilities: [],
+          requiredActionIds: [],
+        })),
+        summary: { exact: 1, compatible: 1, partial: 1, unavailable: 1, unsafe: 1 },
+      },
+    });
+    for (const classification of classifications) expect(html).toContain(`class="${classification}"`);
+    expect(html).toContain("Unsafe plan");
+    expect(html).toContain("Partial compatibility");
   });
 
   it("returns recoverable source-drift and target-unavailable failures without mutation", async () => {
@@ -129,5 +190,15 @@ describe("reviewed clone routes", () => {
     const offlineResponse = await createV1Handlers(offline.market).preview({ params: { provider: source.provider, externalId: source.externalId }, body: { policy } });
     expect(offlineResponse).toMatchObject({ status: 503, body: { error: { code: "target_unavailable", recoverable: true } } });
     expect(offline.state.posts).toBe(0);
+
+    const applyFailure = service({ state: { posts: 0 } });
+    const handlers = createV1Handlers(applyFailure.market);
+    const params = { provider: source.provider, externalId: source.externalId };
+    const preview = await handlers.preview({ params, body: { policy } });
+    const review = preview.body as ReviewResponse;
+    applyFailure.state.failImports = true;
+    const failedApply = await handlers.apply({ params, body: { policy, planDigest: review.plan.id, reviewedAt: review.plan.createdAt, approved: true } });
+    expect(failedApply).toMatchObject({ status: 503, body: { error: { code: "target_unavailable", recoverable: true } } });
+    expect(applyFailure.state.posts).toBe(0);
   });
 });

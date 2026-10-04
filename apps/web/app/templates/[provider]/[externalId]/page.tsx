@@ -1,12 +1,22 @@
-import { marketService } from "../../../../src/runtime.js";
-import { renderEvidence } from "../../../../src/presentation.js";
-import { CloneReview } from "./clone-review.js";
+import { marketService } from "../../../../src/runtime";
+import { renderEvidence } from "../../../../src/presentation";
+import { MarketError } from "../../../../src/market";
+import type { MarketService } from "../../../../src/market";
+import { CloneReview } from "./clone-review";
 
 export const dynamic = "force-dynamic";
 
 export default async function TemplatePage({ params }: { params: Promise<{ provider: string; externalId: string }> }) {
   const identity = await params;
-  const detail = await marketService().detail(identity);
+  let detail: Awaited<ReturnType<MarketService["detail"]>>;
+  try {
+    const market = await marketService();
+    detail = await market.detail(identity);
+  } catch (error) {
+    const code = error instanceof MarketError ? error.code : "inspector_unavailable";
+    const message = error instanceof Error ? error.message : "Template detail is temporarily unavailable";
+    return <><a className="back" href="/">← Complete catalog</a><section><p className="eyebrow">Recoverable inspector error</p><h1>Template detail unavailable</h1><div className="alert danger"><strong>{code}</strong>: {message}</div><p>The source was not imported or activated. Reload this page to fetch a fresh public copy.</p><a href={`/templates/${encodeURIComponent(identity.provider)}/${encodeURIComponent(identity.externalId)}`}>Retry inspector</a></section></>;
+  }
   const manifest = detail.manifest;
   return <><a className="back" href="/">← Complete catalog</a><section className="inspector-head"><p className="eyebrow">{detail.entry.featured ? "Featured · " : ""}{detail.entry.provenance.source.provider}</p><h1>{detail.entry.name}</h1><p>{detail.entry.summary}</p><dl><dt>Creator</dt><dd>{detail.entry.creator.name}</dd><dt>Permission</dt><dd>Confirm before private import</dd><dt>Redistribution</dt><dd>Private destination only</dd></dl></section>
     {!detail.entry.present && <div className="alert warning">Source drift: this template is no longer present in the latest index.</div>}

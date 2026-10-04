@@ -22,7 +22,7 @@ The central databases contain catalog metadata and public evidence only. Full so
 - `POST /api/v1/templates/:provider/:externalId/clone/apply`
 - `POST /api/v1/templates/:provider/:externalId/clone/verify`
 
-Preview is side-effect free. Apply requires `approved: true` and the digest returned by the currently displayed preview. The server refetches and replans before apply; any source or target drift returns `stale_plan` and requires another review.
+Preview is side-effect free. Apply requires `approved: true`, `planDigest`, and `reviewedAt` (the displayed plan's `createdAt`). Verification requires the same review identity plus `targetReference`. The server refetches and replans against that review identity before apply or verification; any source or target drift returns `stale_plan` and requires another review.
 
 ## Operator checklist
 

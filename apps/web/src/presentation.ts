@@ -1,5 +1,5 @@
 import type { AdoptionEvidenceQuery } from "@clone-market/evidence";
-import type { CatalogItem, Review } from "./market.js";
+import type { CatalogItem, ReviewResponse } from "./market.js";
 
 const LABELS = {
   listed: "Listed",
@@ -17,20 +17,23 @@ export function adoptionLabel(item: CatalogItem): string {
 }
 
 export function renderCatalog(items: readonly CatalogItem[]): string {
-  return `<div class="catalog-grid">${items.map((item) => `<article class="template-card">
-    <div class="card-flags">${item.featured ? '<span class="badge featured">Featured</span>' : ""}<span class="badge adoption">${adoptionLabel(item)}</span></div>
-    <h2><a href="/templates/${escape(item.provenance.source.provider)}/${escape(item.provenance.source.externalId)}">${escape(item.name)}</a></h2>
-    <p>${escape(item.summary)}</p><dl><dt>Source</dt><dd>${escape(item.provenance.source.provider)}</dd><dt>Creator</dt><dd>${escape(item.creator.name)}</dd><dt>Evidence</dt><dd class="${item.evidenceState}">${escape(item.evidenceState)}</dd></dl>
-  </article>`).join("")}</div>`;
+  return `<div class="catalog-grid">${items.map((item) => {
+    const href = `/templates/${encodeURIComponent(item.provenance.source.provider)}/${encodeURIComponent(item.provenance.source.externalId)}`;
+    return `<article class="template-card">
+    <div class="card-flags">${item.featured ? '<span class="badge featured">Featured</span>' : ""}<a class="badge adoption" href="${href}#evidence" aria-label="Open evidence for ${escape(item.name)}">${adoptionLabel(item)}</a></div>
+    <h2><a href="${href}">${escape(item.name)}</a></h2>
+    <p>${escape(item.summary)}</p><dl><dt>Source</dt><dd>${escape(item.provenance.source.provider)}</dd><dt>Creator</dt><dd>${escape(item.creator.name)}</dd><dt>Evidence</dt><dd class="${item.evidenceState}">${escape(item.evidenceState)}${item.adoption ? ` · through ${escape(item.adoption.evidenceThrough)}` : ""}</dd></dl>
+  </article>`;
+  }).join("")}</div>`;
 }
 
 export function renderEvidence(query: AdoptionEvidenceQuery | undefined): string {
-  if (!query) return '<p class="empty">No public evidence has been reviewed. This template remains Listed.</p>';
+  if (!query) return '<section id="evidence"><h2>Why Listed</h2><p class="empty">No public evidence has been reviewed. This template remains Listed.</p></section>';
   const counted = new Set(query.countedEvidenceIds);
-  return `<section><h2>Why ${LABELS[query.snapshot.label]}</h2><ul class="rules">${query.contributions.map((rule) => `<li data-rule="${escape(rule.rule)}"><strong>${rule.passed ? "Passed" : "Not passed"}</strong> ${escape(rule.explanation)} (${rule.count}/${rule.threshold})</li>`).join("")}</ul><table><thead><tr><th>Used</th><th>Type</th><th>Claim</th><th>Author</th></tr></thead><tbody>${query.evidence.map((row) => `<tr data-evidence-id="${escape(row.id)}"><td>${counted.has(row.id) ? "Yes" : "No"}</td><td>${escape(row.type)}</td><td>${escape(row.claim)}</td><td>${escape(row.author.name)}</td></tr>`).join("")}</tbody></table></section>`;
+  return `<section id="evidence"><h2>Why ${LABELS[query.snapshot.label]}</h2><ul class="rules">${query.contributions.map((rule) => `<li data-rule="${escape(rule.rule)}"><strong>${rule.passed ? "Passed" : "Not passed"}</strong> ${escape(rule.explanation)} (${rule.count}/${rule.threshold})</li>`).join("")}</ul><table><thead><tr><th>Used</th><th>Type</th><th>Claim</th><th>Author</th></tr></thead><tbody>${query.evidence.map((row) => `<tr data-evidence-id="${escape(row.id)}"><td>${counted.has(row.id) ? "Yes" : "No"}</td><td>${escape(row.type)}</td><td>${escape(row.claim)}</td><td>${escape(row.author.name)}</td></tr>`).join("")}</tbody></table></section>`;
 }
 
-export function renderReview(review: Review): string {
+export function renderReview(review: ReviewResponse): string {
   const rows = review.compatibility.assessments.map((row) => `<tr class="${row.classification}"><td>${escape(row.componentType)}</td><td>${escape(row.componentId)}</td><td><span class="badge">${escape(row.classification)}</span></td><td>${escape(row.rationaleCode)}</td></tr>`).join("");
   return `<section class="review"><header><p class="eyebrow">Private Botmancers import</p><h1>Review before applying</h1><p>${escape(review.preview.summary)}</p></header>
     ${review.compatibility.summary.unsafe ? '<div class="alert danger">Unsafe plan — apply is blocked.</div>' : ""}

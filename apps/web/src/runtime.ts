@@ -1,19 +1,20 @@
 import { SqliteCatalogRepository } from "@clone-market/catalog";
-import { EvidenceService, SqliteEvidenceRepository } from "@clone-market/evidence";
 import { GrokMarketplaceAdapter } from "@clone-market/source-grok";
 import { BotmancersHttpClient } from "@clone-market/target-botmancers";
 import { readConfig } from "./config.js";
 import { MarketService } from "./market.js";
 
-let instance: MarketService | undefined;
+let instance: Promise<MarketService> | undefined;
 
-export function marketService(): MarketService {
-  if (instance) return instance;
+async function createMarketService(): Promise<MarketService> {
+  // The evidence package loads its SQL migration from the filesystem. Keeping
+  // this public-package import request-time avoids webpack rewriting that URL.
+  const { EvidenceService, SqliteEvidenceRepository } = await import(/* webpackIgnore: true */ "@clone-market/evidence");
   const config = readConfig();
   const catalog = new SqliteCatalogRepository(config.catalogDatabase);
   const evidence = new SqliteEvidenceRepository(config.evidenceDatabase);
   const grok = new GrokMarketplaceAdapter({ baseUrl: config.grokBaseUrl });
-  instance = new MarketService({
+  return new MarketService({
     catalog,
     evidence: new EvidenceService(evidence),
     source(provider) {
@@ -22,5 +23,10 @@ export function marketService(): MarketService {
     },
     botmancers: new BotmancersHttpClient({ baseUrl: config.botmancersBaseUrl }),
   });
+}
+
+export function marketService(): Promise<MarketService> {
+  if (instance) return instance;
+  instance = createMarketService();
   return instance;
 }

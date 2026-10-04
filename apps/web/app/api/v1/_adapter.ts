@@ -1,4 +1,4 @@
-import type { ApiRequest, ApiResponse } from "../../../src/http.js";
+import type { ApiRequest, ApiResponse } from "../../../src/http";
 
 export async function json(request: Request, operation: (input: ApiRequest) => Promise<ApiResponse>, params: Record<string, string> = {}) {
   const url = new URL(request.url);

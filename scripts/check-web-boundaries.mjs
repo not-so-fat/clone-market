@@ -11,7 +11,7 @@ const forbidden = [
 
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
-  return (await Promise.all(entries.map((entry) => entry.isDirectory()
+  return (await Promise.all(entries.filter((entry) => ![".next", "node_modules", "dist"].includes(entry.name)).map((entry) => entry.isDirectory()
     ? files(join(directory, entry.name))
     : [join(directory, entry.name)]))).flat();
 }
