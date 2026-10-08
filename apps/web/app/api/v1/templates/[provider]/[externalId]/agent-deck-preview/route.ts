@@ -1,5 +1,5 @@
-import { createV1Handlers } from "../../../../../../src/http";
-import { marketService } from "../../../../../../src/runtime";
+import { createV1Handlers } from "../../../../../../../src/http";
+import { marketService } from "../../../../../../../src/runtime";
 import { json } from "../../../../_adapter";
 
 export const dynamic = "force-dynamic";

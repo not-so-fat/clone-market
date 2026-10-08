@@ -1,6 +1,22 @@
 # Clone Market web
 
-The Next.js app composes the repository's public package APIs into a catalog, template inspector, and reviewed private Botmancers clone flow.
+The Next.js app composes the repository's public package APIs into a trial home page, catalog, template inspector, reviewed private Botmancers clone flow, and read-only Agent Deck registration preview.
+
+## Trial flows
+
+A first-time user starts at `/`, which explains Clone Market in plain language and links to the [Grok Bot Marketplace](https://x.ai/bot/marketplace). Two equal entry paths converge on the same read-only **Would register** preview:
+
+1. **Paste a URL** — submit a canonical `https://x.ai/bot/marketplace/bots/<slug>` link. The server resolves the slug to its catalog source identity, then opens `/templates/:provider/:externalId/agent-deck-preview`. Malformed URLs, unsupported hosts/paths, and valid but unknown bot URLs each return a distinct recoverable error without fetching a manifest.
+2. **Search the marketplace** — search the complete indexed catalog by template name, creator, or summary (no result cap). Each result links to the same shared preview route as URL submission.
+
+The preview fetches the current normalized manifest on demand, maps it through the pure `@clone-market/agent-deck-preview` package (outside UI and route code), and groups deterministic playbook and MCP-service candidates with source-component traceability, readiness, retrieved-at time, unavailable-field disclosure, and a link back to the original Grok template. The preview registers nothing and persists nothing.
+
+Run locally with a configured catalog database:
+
+```sh
+npm run build
+npm run dev --workspace=@clone-market/web
+```
 
 ## Configuration
 
@@ -18,7 +34,10 @@ The central databases contain catalog metadata and public evidence only. Full so
 ## Versioned HTTP surface
 
 - `GET /api/v1/catalog`
+- `GET /api/v1/catalog/search?q=...`
+- `GET /api/v1/catalog/resolve?url=...`
 - `GET /api/v1/templates/:provider/:externalId`
+- `GET /api/v1/templates/:provider/:externalId/agent-deck-preview`
 - `GET /api/v1/templates/:provider/:externalId/evidence`
 - `POST /api/v1/templates/:provider/:externalId/clone/preview`
 - `POST /api/v1/templates/:provider/:externalId/clone/export`
@@ -50,6 +69,11 @@ At both 1280px and 390px widths:
 - Confirm preview writes no artifact, unchecked approval cannot export, and a refreshed/changed digest forces review.
 - Export the template and confirm the artifact digest plus offline verification result.
 - Confirm the UI does not send operators to an unsupported Botmancers `bots/<id>` page.
+- Open `/` at both widths: confirm the plain-language explanation, Grok Marketplace link, URL and search entry paths, and the secondary browse-all link to `/catalog`.
+- Paste a valid public Grok Bot URL and confirm the shared “Would register” preview; repeat via marketplace search and confirm identical Playbooks and MCP services sections.
+- Confirm malformed, unsupported, and unknown-bot URLs show distinct recoverable errors with no preview fetched.
+- Confirm the preview registers nothing (copy says “would register”), shows provenance, retrieved-at time, unavailable fields, and a link back to the Grok template.
+- Keyboard-walk both entry paths with no horizontal page overflow at 1280px and 390px.
 
 Required operator evidence:
 

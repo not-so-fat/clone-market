@@ -11,6 +11,7 @@ import { DeclaredBotmancersCapabilitiesClient } from "@clone-market/target-botma
 import { MemoryArtifactSink } from "./artifact-sink.js";
 import { MarketError, MarketService } from "./market.js";
 import { createV1Handlers } from "./http.js";
+import { renderAgentDeckPreview } from "./presentation.js";
 
 const NOW = "2026-10-07T12:00:00.000Z";
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -226,6 +227,21 @@ describe("Agent Deck preview operation [agent]", () => {
     const fromSearch = await context.market.agentDeckPreview(selected);
     expect(fromSearch).toEqual(fromUrl);
     expect(context.sourceAdapter.requested).toEqual([resolved.source, resolved.source]);
+  });
+
+  it("renders deep-equal Would register sections for both entry paths", async () => {
+    const context = service([alpha, entry("bot-beta-2", "beta", { name: "Beta Bot" })]);
+    const resolved = await context.market.resolveGrokBotUrl("https://x.ai/bot/marketplace/bots/alpha");
+    const searched = await context.market.searchCatalog("Alpha Bot");
+    const fromUrl = renderAgentDeckPreview(await context.market.agentDeckPreview(resolved.source));
+    const fromSearch = renderAgentDeckPreview(await context.market.agentDeckPreview(searched.items[0]!.provenance.source));
+    expect(fromUrl).toBe(fromSearch);
+    expect(fromUrl).toContain("Would register");
+    const playbooks = (html: string) => [...html.matchAll(/data-playbook-id="([^"]+)"/g)].map((match) => match[1]);
+    const services = (html: string) => [...html.matchAll(/data-mcp-id="([^"]+)"/g)].map((match) => match[1]);
+    expect(playbooks(fromUrl)).toEqual(playbooks(fromSearch));
+    expect(services(fromUrl)).toEqual(services(fromSearch));
+    expect(playbooks(fromUrl).length).toBeGreaterThan(0);
   });
 
   it("maps source drift and unknown templates to recoverable preview errors", async () => {

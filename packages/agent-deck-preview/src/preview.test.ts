@@ -100,9 +100,9 @@ describe("Agent Deck registration preview [agent]", () => {
     });
     for (const candidate of preview.playbooks.slice(1)) {
       expect(candidate.supportingContext).toEqual({ memoryIds: [], memoryNames: [] });
-      expect(candidate.sourceComponent.type).not.toBe("memory");
+      expect(candidate.sourceComponent.type as string).not.toBe("memory");
     }
-    expect(preview.playbooks.some(({ sourceComponent }) => sourceComponent.type === "memory")).toBe(false);
+    expect(preview.playbooks.some(({ sourceComponent }) => (sourceComponent.type as string) === "memory")).toBe(false);
   });
 
   it("reports a missing-instructions manifest as a cannot_produce primary with visible unavailable fields", () => {
