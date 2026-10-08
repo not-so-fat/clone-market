@@ -1,0 +1,192 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Agent Deck registration preview [agent] > emits one primary playbook, one per skill and routine, and one MCP candidate per integration 1`] = `
+{
+  "manifestId": "grok-marketplace:bot-trial-1:manifest",
+  "mcpServices": [
+    {
+      "connection": {
+        "credentialState": "unknown",
+        "required": true,
+      },
+      "id": "integration:calendar",
+      "kind": "mcp-service",
+      "readiness": "cannot_produce",
+      "reviewReasons": [
+        "Grok does not expose an MCP endpoint, package, or credential for this integration, so Clone Market cannot identify a service to register.",
+      ],
+      "sourceComponent": {
+        "id": "calendar",
+        "type": "integration",
+      },
+      "title": "Calendar",
+    },
+    {
+      "connection": {
+        "credentialState": "unknown",
+        "required": false,
+      },
+      "id": "integration:drive",
+      "kind": "mcp-service",
+      "readiness": "cannot_produce",
+      "reviewReasons": [
+        "Grok does not expose an MCP endpoint, package, or credential for this integration, so Clone Market cannot identify a service to register.",
+      ],
+      "sourceComponent": {
+        "id": "drive",
+        "type": "integration",
+      },
+      "title": "Drive",
+    },
+  ],
+  "playbooks": [
+    {
+      "id": "primary",
+      "kind": "playbook",
+      "readiness": "ready",
+      "reviewReasons": [
+        "Bot-level instructions are public and complete with 2 public memories as supporting context.",
+      ],
+      "sourceComponent": {
+        "id": "manifest.instructions",
+        "type": "instructions",
+      },
+      "supportingContext": {
+        "memoryIds": [
+          "memory-a",
+          "memory-b",
+        ],
+        "memoryNames": [
+          "Alpha notes",
+          "Beta notes",
+        ],
+      },
+      "title": "Trial Bot — Primary instructions",
+    },
+    {
+      "id": "skill:skill-a",
+      "kind": "playbook",
+      "readiness": "needs_review",
+      "reviewReasons": [
+        "Skill instructions are not public from Grok; review the public description before registering.",
+      ],
+      "sourceComponent": {
+        "id": "skill-a",
+        "type": "skill",
+      },
+      "supportingContext": {
+        "memoryIds": [],
+        "memoryNames": [],
+      },
+      "title": "Alpha skill",
+    },
+    {
+      "id": "skill:skill-b",
+      "kind": "playbook",
+      "readiness": "ready",
+      "reviewReasons": [
+        "Public skill description and instructions are available.",
+      ],
+      "sourceComponent": {
+        "id": "skill-b",
+        "type": "skill",
+      },
+      "supportingContext": {
+        "memoryIds": [],
+        "memoryNames": [],
+      },
+      "title": "Beta skill",
+    },
+    {
+      "id": "routine:routine-a",
+      "kind": "playbook",
+      "readiness": "ready",
+      "reviewReasons": [
+        "Public routine instructions are available.",
+      ],
+      "sourceComponent": {
+        "id": "routine-a",
+        "type": "routine",
+      },
+      "supportingContext": {
+        "memoryIds": [],
+        "memoryNames": [],
+      },
+      "title": "Morning routine",
+    },
+  ],
+  "provenanceUrl": "https://x.ai/bot/marketplace/bots/trial-bot",
+  "retrievedAt": "2026-10-07T12:00:00.000Z",
+  "schemaVersion": "1.0.0",
+  "source": {
+    "externalId": "bot-trial-1",
+    "provider": "grok-marketplace",
+  },
+  "template": {
+    "creator": "Ada",
+    "name": "Trial Bot",
+    "summary": "A public trial bot.",
+  },
+  "unavailable": [],
+}
+`;
+
+exports[`Agent Deck registration preview [agent] > reports a missing-instructions manifest as a cannot_produce primary with visible unavailable fields 1`] = `
+{
+  "manifestId": "grok-marketplace:bot-trial-1:manifest",
+  "mcpServices": [],
+  "playbooks": [
+    {
+      "id": "primary",
+      "kind": "playbook",
+      "readiness": "cannot_produce",
+      "reviewReasons": [
+        "Bot-level instructions are not public from Grok, so a primary playbook cannot be produced.",
+      ],
+      "sourceComponent": {
+        "id": "manifest.instructions",
+        "type": "instructions",
+      },
+      "supportingContext": {
+        "memoryIds": [],
+        "memoryNames": [],
+      },
+      "title": "Trial Bot — Primary instructions",
+    },
+  ],
+  "provenanceUrl": "https://x.ai/bot/marketplace/bots/trial-bot",
+  "retrievedAt": "2026-10-07T12:00:00.000Z",
+  "schemaVersion": "1.0.0",
+  "source": {
+    "externalId": "bot-trial-1",
+    "provider": "grok-marketplace",
+  },
+  "template": {
+    "creator": "Ada",
+    "name": "Trial Bot",
+    "summary": "A public trial bot.",
+  },
+  "unavailable": [
+    {
+      "detail": "instructions is not public from Grok.",
+      "field": "instructions",
+    },
+    {
+      "detail": "integrations is not public from Grok.",
+      "field": "integrations",
+    },
+    {
+      "detail": "memories is not public from Grok.",
+      "field": "memories",
+    },
+    {
+      "detail": "routines is not public from Grok.",
+      "field": "routines",
+    },
+    {
+      "detail": "skills is not public from Grok.",
+      "field": "skills",
+    },
+  ],
+}
+`;

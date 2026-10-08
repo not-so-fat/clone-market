@@ -10,6 +10,7 @@
     "test": "vitest run --root ../.. apps/web"
   },
   "dependencies": {
+    "@clone-market/agent-deck-preview": "0.1.0",
     "@clone-market/catalog": "0.1.0",
     "@clone-market/compatibility": "0.1.0",
     "@clone-market/core": "0.1.0",
