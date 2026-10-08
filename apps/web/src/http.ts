@@ -27,7 +27,15 @@ async function response(operation: () => Promise<unknown>): Promise<ApiResponse>
     return { status: 200, body: await operation() };
   } catch (error) {
     if (error instanceof MarketError) {
-      const status = error.code === "not_found" ? 404 : error.code === "approval_required" ? 403 : error.code === "stale_plan" ? 409 : 503;
+      const status = error.code === "not_found"
+        ? 404
+        : error.code === "approval_required"
+          ? 403
+          : error.code === "stale_plan"
+            ? 409
+            : error.code === "invalid_grok_url" || error.code === "unsupported_grok_url"
+              ? 400
+              : 503;
       return { status, body: { error: { code: error.code, message: error.message, recoverable: true } } };
     }
     return { status: 400, body: { error: { code: "invalid_request", message: error instanceof Error ? error.message : "Invalid request", recoverable: true } } };
@@ -42,6 +50,9 @@ export function createV1Handlers(market: MarketService) {
       const evidence = await market.evidence(source(request));
       return evidence ?? { snapshot: undefined, countedEvidenceIds: [], contributions: [], evidence: [] };
     }),
+    resolveGrokBot: (request: ApiRequest) => response(() => market.resolveGrokBotUrl(required(request.query?.url, "url"))),
+    searchCatalog: (request: ApiRequest) => response(() => market.searchCatalog(request.query?.q ?? "")),
+    agentDeckPreview: (request: ApiRequest) => response(() => market.agentDeckPreview(source(request))),
     preview: (request: ApiRequest) => response(async () => {
       const body = reviewBody(request);
       const { manifest: _requestScopedManifest, ...review } = await market.preview({ source: source(request), policy: body.policy });

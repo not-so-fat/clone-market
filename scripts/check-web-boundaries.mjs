@@ -4,9 +4,9 @@ import { extname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const forbidden = [
-  /@clone-market\/(?:source-grok|compatibility|target-botmancers)\/src\//,
-  /packages\/(?:source-grok|compatibility|target-botmancers)\/src\//,
-  /(?:function|const)\s+(?:parseDetail|parseIndex|deriveAdoptionSnapshot|payloadFor|rationaleClassifications)\b/,
+  /@clone-market\/(?:source-grok|compatibility|target-botmancers|agent-deck-preview)\/src\//,
+  /packages\/(?:source-grok|compatibility|target-botmancers|agent-deck-preview)\/src\//,
+  /(?:function|const)\s+(?:parseDetail|parseIndex|deriveAdoptionSnapshot|payloadFor|rationaleClassifications|previewAgentDeckRegistration)\b/,
 ];
 
 async function files(directory) {
