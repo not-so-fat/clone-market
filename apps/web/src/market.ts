@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { CatalogEntry, CatalogRepository, ClonePlan, SourceAdapter, SourceIdentity, VerifyResult } from "@clone-market/core";
+import { previewAgentDeckRegistration, type AgentDeckRegistrationPreview } from "@clone-market/agent-deck-preview";
 import { classifyEvidenceFreshness, type EvidenceService, type AdoptionEvidenceQuery } from "@clone-market/evidence";
+import { GrokUrlError, parseGrokBotUrl } from "./grok-url.js";
 import { planClone, type ClonePolicy, type CompatibilityPlan, type TargetCapabilities } from "@clone-market/compatibility";
 import {
   BotmancersTargetAdapter,
@@ -96,8 +98,25 @@ async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, ope
 }
 
 export class MarketError extends Error {
-  constructor(readonly code: "not_found" | "source_drift" | "stored_data_unavailable" | "target_unavailable" | "sink_unavailable" | "unsafe_plan" | "stale_plan" | "approval_required", message: string) {
+  constructor(readonly code: "not_found" | "source_drift" | "stored_data_unavailable" | "target_unavailable" | "sink_unavailable" | "unsafe_plan" | "stale_plan" | "approval_required" | "invalid_grok_url" | "unsupported_grok_url", message: string) {
     super(message);
+  }
+}
+
+function grokSlugFromProvenanceUrl(provenanceUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(provenanceUrl);
+  } catch {
+    return undefined;
+  }
+  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+  const slug = segments.at(-1);
+  if (slug === undefined) return undefined;
+  try {
+    return decodeURIComponent(slug);
+  } catch {
+    return undefined;
   }
 }
 
@@ -134,12 +153,16 @@ export class MarketService {
     return templates;
   }
 
-  async catalog(filters: CatalogFilters = {}): Promise<{ items: CatalogItem[]; total: number; filterWarnings: CatalogFilterWarning[] }> {
+  async #enrichedCatalog(): Promise<CatalogItem[]> {
     const all = await this.#allCatalog();
-    const enriched = await Promise.all(all.map(async (entry) => {
+    return Promise.all(all.map(async (entry) => {
       const adoption = await this.#deps.evidence.getLatest(entry.id);
       return { ...entry, ...(adoption ? { adoption: adoption.snapshot } : {}), evidenceState: classifyEvidenceFreshness(adoption?.snapshot, this.#now()) };
     }));
+  }
+
+  async catalog(filters: CatalogFilters = {}): Promise<{ items: CatalogItem[]; total: number; filterWarnings: CatalogFilterWarning[] }> {
+    const enriched = await this.#enrichedCatalog();
     let items = enriched.filter((entry) => {
       const evidenceMatches = !filters.evidenceState
         || entry.evidenceState === filters.evidenceState
@@ -169,6 +192,45 @@ export class MarketService {
       items = items.filter((_entry, index) => checked[index]?.matches);
     }
     return { items, total: items.length, filterWarnings };
+  }
+
+  /**
+   * Resolve a canonical public Grok Bot URL to its catalog source identity.
+   * Pure catalog lookup: throws typed, non-mutating errors without fetching a manifest.
+   */
+  async resolveGrokBotUrl(url: string): Promise<{ source: SourceIdentity; entry: CatalogEntry }> {
+    let slug: string;
+    try {
+      slug = parseGrokBotUrl(url).slug;
+    } catch (error) {
+      if (error instanceof GrokUrlError) throw new MarketError(error.code, error.message);
+      throw error;
+    }
+    const all = await this.#allCatalog();
+    const entry = all.find((candidate) => grokSlugFromProvenanceUrl(candidate.provenance.url) === slug);
+    if (!entry) throw new MarketError("not_found", `Grok bot "${slug}" is not in the catalog`);
+    return { source: { ...entry.provenance.source }, entry };
+  }
+
+  /** Complete-catalog text search over name, creator, and summary with no result cap. */
+  async searchCatalog(query: string): Promise<{ items: CatalogItem[]; total: number; query: string }> {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) return { items: [], total: 0, query: "" };
+    const needle = trimmed.toLowerCase();
+    const items = (await this.#enrichedCatalog()).filter((entry) =>
+      entry.name.toLowerCase().includes(needle)
+      || entry.creator.name.toLowerCase().includes(needle)
+      || entry.summary.toLowerCase().includes(needle)
+    );
+    return { items, total: items.length, query: trimmed };
+  }
+
+  /**
+   * Fetch the current manifest on demand and return the read-only Agent Deck
+   * registration preview. Shared by the URL and search entry paths. Side-effect free.
+   */
+  async agentDeckPreview(source: SourceIdentity): Promise<AgentDeckRegistrationPreview> {
+    return previewAgentDeckRegistration(await this.manifest(source));
   }
 
   async inspect(source: SourceIdentity) {
