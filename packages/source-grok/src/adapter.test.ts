@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { BotTemplateManifestSchema, type SourceAdapter, type SourceIdentity } from "@clone-market/core";
 import { describe, expect, it } from "vitest";
 
-import { GrokMarketplaceAdapter, SourceRequestError, SourceSchemaDriftError, runLiveSmoke, type FetchClient, type FetchResponse } from "./index.js";
+import { GrokMarketplaceAdapter, SourceRequestError, SourceSchemaDriftError, SourceUnknownIdError, runLiveSmoke, type FetchClient, type FetchResponse } from "./index.js";
 import { parseDetail, parseIndex, type RawGrokDocument } from "./parsing.js";
 
 const retrievedAt = "2026-10-02T18:30:00.000Z";
@@ -171,6 +171,55 @@ describe("detail normalization", () => {
       "https://x.ai/bot/marketplace/bots/projects-manager",
     ]);
   });
+
+  it("resolves a stored source ID through the index on a fresh adapter before fetching detail by slug", async () => {
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const detail = (await fixture("template-full-featured.html"))
+      .replaceAll("project-steward-public", "dr-eggbot-v2")
+      .replaceAll("project-steward", "bot-dr-eggbot-v2-20261002");
+    const urls: string[] = [];
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async (url) => {
+        urls.push(url);
+        if (url === "https://x.ai/bot/marketplace/") return response(index);
+        if (url === "https://x.ai/bot/marketplace/bots/dr-eggbot-v2") return response(detail);
+        return response("not found", 404);
+      },
+      now: () => retrievedAt,
+    });
+    const source = { provider: adapter.source, externalId: "bot-dr-eggbot-v2-20261002" };
+    const raw = await adapter.fetchTemplate(source);
+    expect(urls).toEqual([
+      "https://x.ai/bot/marketplace/",
+      "https://x.ai/bot/marketplace/bots/dr-eggbot-v2",
+    ]);
+    expect(urls).not.toContain("https://x.ai/bot/marketplace/bots/bot-dr-eggbot-v2-20261002");
+    const manifest = await adapter.normalizeTemplate(raw, retrievedAt);
+    expect(manifest.source).toEqual(source);
+    expect(manifest.provenanceUrl).toBe("https://x.ai/bot/marketplace/bots/dr-eggbot-v2");
+  });
+
+  it("returns a typed unknown-ID failure without requesting an ID-shaped detail URL", async () => {
+    const index = await fixture("marketplace-index-2026-10-02.html");
+    const urls: string[] = [];
+    const adapter = new GrokMarketplaceAdapter({
+      fetch: async (url) => {
+        urls.push(url);
+        if (url === "https://x.ai/bot/marketplace/") return response(index);
+        return response("not found", 404);
+      },
+      now: () => retrievedAt,
+    });
+    const source = { provider: adapter.source, externalId: "bot-does-not-exist-0000" };
+    const error = await adapter.fetchTemplate(source).then(
+      () => { throw new Error("expected fetchTemplate to reject for an unknown source ID"); },
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(SourceUnknownIdError);
+    expect(error).toMatchObject({ name: "SourceUnknownIdError", source });
+    expect(urls).toEqual(["https://x.ai/bot/marketplace/"]);
+    expect(urls).not.toContain(`https://x.ai/bot/marketplace/bots/${source.externalId}`);
+  });
 });
 
 describe("schema drift diagnostics", () => {
@@ -313,11 +362,13 @@ describe("responsible request controls", () => {
   });
 
   it("bounds concurrent source requests", async () => {
+    const index = await fixture("marketplace-index-2026-10-02.html");
     const body = await fixture("template-full-featured.html");
     let active = 0;
     let maximum = 0;
     const releases: Array<() => void> = [];
-    const fetch: FetchClient = async () => {
+    const fetch: FetchClient = async (url) => {
+      if (url === "https://x.ai/bot/marketplace/") return response(index);
       active += 1;
       maximum = Math.max(maximum, active);
       await new Promise<void>((resolve) => releases.push(resolve));
@@ -325,7 +376,10 @@ describe("responsible request controls", () => {
       return response(body);
     };
     const adapter = new GrokMarketplaceAdapter({ fetch, concurrency: 2, now: () => retrievedAt });
-    const requests = ["one", "two", "three"].map((externalId) => adapter.fetchTemplate({ provider: adapter.source, externalId }));
+    await adapter.listTemplates();
+    const requests = ["bot-projects-manager-20261002", "bot-tinkabot-20261002", "bot-dr-eggbot-v2-20261002"].map((externalId) =>
+      adapter.fetchTemplate({ provider: adapter.source, externalId }),
+    );
     await new Promise((resolve) => setImmediate(resolve));
     expect(maximum).toBe(2);
     releases.shift()?.();

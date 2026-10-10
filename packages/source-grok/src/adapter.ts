@@ -6,7 +6,7 @@ import {
   type SourceIdentity,
 } from "@clone-market/core";
 
-import { SourceRequestError, SourceSchemaDriftError, type GrokRetrievalMetadata } from "./errors.js";
+import { SourceRequestError, SourceSchemaDriftError, SourceUnknownIdError, type GrokRetrievalMetadata } from "./errors.js";
 import { parseDetail, parseIndex, type RawGrokDocument } from "./parsing.js";
 
 export type FetchResponse = { ok: boolean; status: number; text(): Promise<string> };
@@ -157,7 +157,12 @@ export class GrokMarketplaceAdapter implements SourceAdapter {
 
   async fetchTemplate(source: SourceIdentity): Promise<RawGrokDocument> {
     if (source.provider !== this.source) throw new RangeError(`Expected source provider ${this.source}`);
-    const slug = this.#slugs.get(source.externalId) ?? source.externalId;
+    let slug = this.#slugs.get(source.externalId);
+    if (slug === undefined) {
+      await this.listTemplates();
+      slug = this.#slugs.get(source.externalId);
+    }
+    if (slug === undefined) throw new SourceUnknownIdError({ provider: this.source, externalId: source.externalId });
     return this.#request(new URL(`bots/${encodeURIComponent(slug)}`, this.#baseUrl), source);
   }
 
@@ -179,8 +184,6 @@ export class GrokMarketplaceAdapter implements SourceAdapter {
 
   async getTemplate(source: SourceIdentity): Promise<BotTemplateManifest> {
     if (source.provider !== this.source) throw new RangeError(`Expected source provider ${this.source}`);
-    if (!this.#slugs.has(source.externalId)) await this.listTemplates();
-    if (!this.#slugs.has(source.externalId)) throw new RangeError(`Unknown ${this.source} source identifier ${source.externalId}`);
     const document = await this.fetchTemplate(source);
     return this.normalizeTemplate(document, document.retrievedAt);
   }
