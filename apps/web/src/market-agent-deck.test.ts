@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BotTemplateManifest, CatalogEntry, CatalogRepository, SourceAdapter } from "@clone-market/core";
 import { SqliteCatalogRepository } from "@clone-market/catalog";
 import { EvidenceService, SqliteEvidenceRepository } from "@clone-market/evidence";
+import { GrokMarketplaceAdapter, type FetchResponse } from "@clone-market/source-grok";
 import { DeclaredBotmancersCapabilitiesClient } from "@clone-market/target-botmancers";
 import { MemoryArtifactSink } from "./artifact-sink.js";
 import { MarketError, MarketService } from "./market.js";
@@ -305,6 +306,184 @@ describe("Agent Deck preview operation [agent]", () => {
         `facts for ${resolved.source.externalId}`,
         "skill:skill-1",
         "integration:calendar",
+      ]) {
+        expect(serialized).not.toContain(requestScopedValue);
+      }
+      database.close();
+    }
+  });
+});
+
+describe("Fresh Grok adapter preview [agent]", () => {
+  const EGG_ID = "bot-dr-eggbot-v2-20261002";
+  const EGG_SLUG = "dr-eggbot-v2";
+  const INDEX_URL = "https://x.ai/bot/marketplace/";
+  const DETAIL_SLUG_URL = `https://x.ai/bot/marketplace/bots/${EGG_SLUG}`;
+  const DETAIL_ID_URL = `https://x.ai/bot/marketplace/bots/${EGG_ID}`;
+  const grokFixtureRoot = new URL("../../../packages/source-grok/test/fixtures/", import.meta.url);
+
+  async function grokFixture(name: string): Promise<string> {
+    return readFile(new URL(name, grokFixtureRoot), "utf8");
+  }
+
+  function grokResponse(body: string, status = 200): FetchResponse {
+    return { ok: status >= 200 && status < 300, status, text: async () => body };
+  }
+
+  function eggbotEntry(): CatalogEntry {
+    return entry(EGG_ID, EGG_SLUG, {
+      name: "dr eggbot",
+      summary: "Sanitized marketplace description 3.",
+      creator: { id: "creator-03", name: "Lauren Tan" },
+      categories: ["Productivity"],
+      featured: true,
+    });
+  }
+
+  async function freshContext(items: CatalogEntry[] = [eggbotEntry(), entry("bot-beta-2", "beta", { name: "Beta Bot" })]) {
+    const index = await grokFixture("marketplace-index-2026-10-02.html");
+    const detail = (await grokFixture("template-full-featured.html"))
+      .replaceAll("project-steward-public", EGG_SLUG)
+      .replaceAll("project-steward", EGG_ID);
+    const urls: string[] = [];
+    const grok = new GrokMarketplaceAdapter({
+      fetch: async (url) => {
+        urls.push(url);
+        if (url === INDEX_URL) return grokResponse(index);
+        if (url === DETAIL_SLUG_URL) return grokResponse(detail);
+        return grokResponse("not found", 404);
+      },
+      now: () => NOW,
+      maxRetries: 0,
+    });
+    const repo = repository(items);
+    const artifacts = new MemoryArtifactSink();
+    const market = new MarketService({
+      catalog: repo,
+      evidence: { async getLatest() { return undefined; } },
+      source() { return grok; },
+      botmancers: new DeclaredBotmancersCapabilitiesClient(),
+      artifacts,
+      now: () => NOW,
+    });
+    return { market, repo, grok, urls, artifacts };
+  }
+
+  it("resolves the stored ID to its public slug on both URL and search entry paths", async () => {
+    const { market, urls, artifacts } = await freshContext();
+    const resolved = await market.resolveGrokBotUrl(`https://x.ai/bot/marketplace/bots/${EGG_SLUG}`);
+    expect(resolved.source).toEqual({ provider: "grok-marketplace", externalId: EGG_ID });
+    const searched = await market.searchCatalog("dr eggbot");
+    expect(searched.total).toBe(1);
+    const selected = searched.items[0]!.provenance.source;
+    expect(selected).toEqual(resolved.source);
+
+    const fromUrl = await market.agentDeckPreview(resolved.source);
+    const fromSearch = await market.agentDeckPreview(selected);
+    expect(fromSearch).toEqual(fromUrl);
+    expect(fromUrl.source).toEqual({ provider: "grok-marketplace", externalId: EGG_ID });
+    expect(fromUrl.provenanceUrl).toBe(DETAIL_SLUG_URL);
+    expect(fromUrl.playbooks.map(({ id }) => id)).toEqual(["primary", "skill:skill-planning", "routine:routine-standup"]);
+    expect(fromUrl.mcpServices.map(({ id }) => id)).toEqual(["integration:integration-calendar"]);
+
+    expect(urls[0]).toBe(INDEX_URL);
+    expect(urls[1]).toBe(DETAIL_SLUG_URL);
+    expect(urls).toContain(DETAIL_SLUG_URL);
+    expect(urls).not.toContain(DETAIL_ID_URL);
+    for (const url of urls) {
+      expect([INDEX_URL, DETAIL_SLUG_URL]).toContain(url);
+    }
+    expect(artifacts.store.size).toBe(0);
+
+    const htmlFromUrl = renderAgentDeckPreview(fromUrl);
+    const htmlFromSearch = renderAgentDeckPreview(fromSearch);
+    expect(htmlFromUrl).toBe(htmlFromSearch);
+    expect(htmlFromUrl).toContain("Would register");
+    const playbooks = (html: string) => [...html.matchAll(/data-playbook-id="([^"]+)"/g)].map((match) => match[1]);
+    const services = (html: string) => [...html.matchAll(/data-mcp-id="([^"]+)"/g)].map((match) => match[1]);
+    expect(playbooks(htmlFromUrl)).toEqual(["primary", "skill:skill-planning", "routine:routine-standup"]);
+    expect(services(htmlFromUrl)).toEqual(["integration:integration-calendar"]);
+  });
+
+  it("persists no fresh-adapter manifest or preview content in SQLite storage", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "clone-market-agent-deck-fresh-"));
+    temporaryDirectories.push(directory);
+    const catalogPath = join(directory, "catalog.sqlite");
+    const evidencePath = join(directory, "evidence.sqlite");
+    const catalog = new SqliteCatalogRepository(catalogPath);
+    const eggbot = eggbotEntry();
+    await catalog.reconcile({
+      source: "grok-marketplace",
+      retrievedAt: NOW,
+      records: [{
+        template: {
+          schemaVersion: eggbot.schemaVersion,
+          id: eggbot.id,
+          name: eggbot.name,
+          summary: eggbot.summary,
+          creator: eggbot.creator,
+          categories: eggbot.categories,
+          firstSeenAt: eggbot.firstSeenAt,
+          lastSeenAt: eggbot.lastSeenAt,
+          featured: eggbot.featured,
+          provenance: eggbot.provenance,
+        },
+        sourceMetadata: eggbot.sourceMetadata,
+      }],
+    });
+    const evidenceRepository = new SqliteEvidenceRepository(evidencePath);
+
+    const index = await grokFixture("marketplace-index-2026-10-02.html");
+    const detail = (await grokFixture("template-full-featured.html"))
+      .replaceAll("project-steward-public", EGG_SLUG)
+      .replaceAll("project-steward", EGG_ID);
+    const urls: string[] = [];
+    const grok = new GrokMarketplaceAdapter({
+      fetch: async (url) => {
+        urls.push(url);
+        if (url === INDEX_URL) return grokResponse(index);
+        if (url === DETAIL_SLUG_URL) return grokResponse(detail);
+        return grokResponse("not found", 404);
+      },
+      now: () => NOW,
+      maxRetries: 0,
+    });
+    const artifacts = new MemoryArtifactSink();
+    const market = new MarketService({
+      catalog,
+      evidence: new EvidenceService(evidenceRepository),
+      source() { return grok; },
+      botmancers: new DeclaredBotmancersCapabilitiesClient(),
+      artifacts,
+      now: () => NOW,
+    });
+
+    const resolved = await market.resolveGrokBotUrl(`https://x.ai/bot/marketplace/bots/${EGG_SLUG}`);
+    expect((await createV1Handlers(market).searchCatalog({ query: { q: "dr eggbot" } })).status).toBe(200);
+    const preview = await market.agentDeckPreview(resolved.source);
+    expect(preview.playbooks.map(({ id }) => id)).toEqual(["primary", "skill:skill-planning", "routine:routine-standup"]);
+    expect(urls).toContain(DETAIL_SLUG_URL);
+    expect(urls).not.toContain(DETAIL_ID_URL);
+    expect(artifacts.store.size).toBe(0);
+    catalog.close();
+    evidenceRepository.close();
+
+    for (const path of [catalogPath, evidencePath]) {
+      const database = new DatabaseSync(path, { readOnly: true });
+      const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>;
+      const serialized = JSON.stringify(tables.flatMap(({ name }) => database.prepare(`SELECT * FROM ${name}`).all()));
+      for (const requestScopedValue of [
+        preview.manifestId,
+        "Coordinate work with concise, evidence-based updates.",
+        "Prefer short status updates.",
+        "skill-planning",
+        "Identify owners and dependencies.",
+        "routine-standup",
+        "Summarize progress, risks, and next actions.",
+        "integration-calendar",
+        "skill:skill-planning",
+        "routine:routine-standup",
+        "integration:integration-calendar",
       ]) {
         expect(serialized).not.toContain(requestScopedValue);
       }
