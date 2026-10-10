@@ -23,6 +23,16 @@ export class SourceSchemaDriftError extends Error {
   }
 }
 
+export class SourceUnknownIdError extends Error {
+  readonly source: SourceIdentity;
+
+  constructor(source: SourceIdentity) {
+    super(`Unknown ${source.provider} source identifier ${source.externalId}`);
+    this.name = "SourceUnknownIdError";
+    this.source = { ...source };
+  }
+}
+
 export class SourceRequestError extends Error {
   readonly url: string;
   readonly status?: number;
