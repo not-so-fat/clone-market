@@ -34,6 +34,16 @@ describe("web data path resolution [agent]", () => {
     }).botmancersBaseUrl).toBe("http://127.0.0.1:43123/");
   });
 
+  it("treats blank Botmancers URLs as unset (declared capabilities)", () => {
+    const config = readConfig({
+      CLONE_MARKET_ROOT: findCloneMarketRoot(),
+      CLONE_MARKET_BOTMANCERS_BASE_URL: "  ",
+      CLONE_MARKET_BOTMANCERS_UI_BASE_URL: "",
+    });
+    expect(config.botmancersBaseUrl).toBeUndefined();
+    expect(config.botmancersUiBaseUrl).toBeUndefined();
+  });
+
   it("keeps operator absolute paths unchanged", () => {
     mkdirSync(join(process.cwd(), ".temporal/logs"), { recursive: true });
     writeFileSync(join(process.cwd(), ".temporal/logs/path-resolution.txt"), `${findCloneMarketRoot()}\n`);

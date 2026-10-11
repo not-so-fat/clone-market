@@ -9,9 +9,16 @@ const forbidden = [
   /(?:function|const)\s+(?:parseDetail|parseIndex|deriveAdoptionSnapshot|payloadFor|rationaleClassifications|previewAgentDeckRegistration)\b/,
 ];
 
+const ignoredDirectories = [".next", "node_modules", "dist"];
+
+function ignored(name) {
+  // Demo builds use .next-demo plus per-run suffixes; all are generated output.
+  return ignoredDirectories.includes(name) || name === ".next-demo" || name.startsWith(".next-demo-");
+}
+
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
-  return (await Promise.all(entries.filter((entry) => ![".next", "node_modules", "dist"].includes(entry.name)).map((entry) => entry.isDirectory()
+  return (await Promise.all(entries.filter((entry) => !ignored(entry.name)).map((entry) => entry.isDirectory()
     ? files(join(directory, entry.name))
     : [join(directory, entry.name)]))).flat();
 }
