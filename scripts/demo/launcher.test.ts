@@ -29,9 +29,9 @@ afterEach(async () => {
   for (const path of distDirs.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-async function launch(tag: string, demoRoot: string) {
-  const webPort = await allocatePort();
-  const fixturePort = await allocatePort();
+async function launch(tag: string, demoRoot: string, ports?: { webPort: number; fixturePort: number }) {
+  const webPort = ports?.webPort ?? await allocatePort();
+  const fixturePort = ports?.fixturePort ?? await allocatePort();
   let stdout = "";
   let stderr = "";
   const handle = await runDemo({
@@ -122,17 +122,22 @@ describe("demo launcher [agent]", () => {
   it("relaunches idempotently against the same demo directory", async () => {
     const demoRoot = mkdtempSync(join(tmpdir(), "demo-relaunch-"));
     temporary.push(demoRoot);
+    // Reuse both ports across launches, exactly like real `npm run demo`
+    // reruns on the fixed default ports: catalog provenance URLs embed the
+    // fixture port, so only same-port relaunches hash as unchanged.
+    const ports = { webPort: await allocatePort(), fixturePort: await allocatePort() };
 
-    const first = await launch("relaunch-a", demoRoot);
+    const first = await launch("relaunch-a", demoRoot, ports);
     const firstTotal = first.handle.seed.catalog.total;
     const firstSnapshot = first.handle.seed.evidence.snapshotId;
     expect(firstTotal).toBeGreaterThan(0);
     await first.handle.stop();
     expect((await first.handle.done).code).toBe(0);
 
-    const second = await launch("relaunch-b", demoRoot);
+    const second = await launch("relaunch-b", demoRoot, ports);
     expect(second.handle.seed.catalog.total).toBe(firstTotal);
     expect(second.handle.seed.catalog.added).toBe(0);
+    expect(second.handle.seed.catalog.changed).toBe(0);
     expect(second.handle.seed.catalog.unchanged).toBe(firstTotal);
     expect(second.handle.seed.evidence.snapshotId).toBe(firstSnapshot);
     expect(await countCatalogTemplates(second.handle.plan.catalogPath)).toBe(firstTotal);

@@ -55,6 +55,9 @@ describe("demo fixture source [agent]", () => {
     ]);
     const manifest = await adapter.normalizeTemplate(raw, "2026-10-03T18:00:00.000Z");
     expect(manifest.source).toEqual({ provider: DEMO_CHOSEN_PROVIDER, externalId: DEMO_CHOSEN_EXTERNAL_ID });
-    expect(manifest.template.name).toContain("Projects Manager");
+    // The detail fixture keeps its captured "Project Steward" title: the demo
+    // remaps only slugs/IDs, exactly like smoke:v0's fixture adapter.
+    // "Projects Manager" is the index/catalog name for the same template.
+    expect(manifest.template.name).toContain("Project Steward");
   });
 });
