@@ -243,11 +243,7 @@ function resolveNextBin(webDir) {
 
 /** Environment for the web child: explicit demo values win over .env.local. */
 export function webChildEnv(plan, environment = process.env) {
-  const {
-    CLONE_MARKET_BOTMANCERS_BASE_URL: _botmancers,
-    CLONE_MARKET_BOTMANCERS_UI_BASE_URL: _botmancersUi,
-    ...rest
-  } = environment;
+  const { ...rest } = environment;
   return {
     ...rest,
     CLONE_MARKET_DEMO: "1",
@@ -256,6 +252,12 @@ export function webChildEnv(plan, environment = process.env) {
     CLONE_MARKET_EVIDENCE_DB: plan.evidencePath,
     CLONE_MARKET_ARTIFACT_DIR: plan.artifactDir,
     CLONE_MARKET_GROK_BASE_URL: plan.fixtureBaseUrl,
+    // Blank, not deleted: Next.js fills variables absent from process.env from
+    // apps/web/.env.local, while readConfig's optionalUrl treats blank as
+    // unset — so blank keeps declared Botmancers capabilities without letting
+    // an operator .env.local supply an HTTP endpoint.
+    CLONE_MARKET_BOTMANCERS_BASE_URL: "",
+    CLONE_MARKET_BOTMANCERS_UI_BASE_URL: "",
     PORT: String(plan.webPort),
   };
 }

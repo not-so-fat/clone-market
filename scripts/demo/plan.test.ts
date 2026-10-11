@@ -70,7 +70,7 @@ describe("demo plan [agent]", () => {
     }
   });
 
-  it("builds a web child environment that overrides .env.local and scrubs Botmancers HTTP", () => {
+  it("builds a web child environment that overrides .env.local and blanks Botmancers HTTP", () => {
     const plan = planDemo({ root: ROOT });
     const env = webChildEnv(plan, {
       CLONE_MARKET_CATALOG_DB: "/operator/catalog.sqlite",
@@ -84,8 +84,10 @@ describe("demo plan [agent]", () => {
     expect(env.CLONE_MARKET_EVIDENCE_DB).toBe(plan.evidencePath);
     expect(env.CLONE_MARKET_ARTIFACT_DIR).toBe(plan.artifactDir);
     expect(env.CLONE_MARKET_GROK_BASE_URL).toBe(plan.fixtureBaseUrl);
-    expect(env.CLONE_MARKET_BOTMANCERS_BASE_URL).toBeUndefined();
-    expect(env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL).toBeUndefined();
+    // Present-but-blank: absent variables would be refilled from
+    // apps/web/.env.local by Next.js; readConfig treats blank as unset.
+    expect(env.CLONE_MARKET_BOTMANCERS_BASE_URL).toBe("");
+    expect(env.CLONE_MARKET_BOTMANCERS_UI_BASE_URL).toBe("");
   });
 
   it("resolves the repository root from CLONE_MARKET_ROOT or the checkout", () => {

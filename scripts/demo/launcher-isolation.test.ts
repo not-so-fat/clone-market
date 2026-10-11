@@ -58,6 +58,8 @@ describe("demo operator isolation [agent]", () => {
           "CLONE_MARKET_EVIDENCE_DB=/nonexistent/isolation-sentinel.sqlite",
           "CLONE_MARKET_ARTIFACT_DIR=/nonexistent/isolation-sentinel",
           "CLONE_MARKET_GROK_BASE_URL=http://127.0.0.1:9/",
+          "CLONE_MARKET_BOTMANCERS_BASE_URL=http://127.0.0.1:9/",
+          "CLONE_MARKET_BOTMANCERS_UI_BASE_URL=http://127.0.0.1:9/",
           "",
         ].join("\n"),
       },
@@ -107,6 +109,27 @@ describe("demo operator isolation [agent]", () => {
       const payload = await preview.json() as { playbooks: unknown[]; mcpServices: unknown[] };
       expect(payload.playbooks.length).toBeGreaterThan(0);
       expect(payload.mcpServices.length).toBeGreaterThan(0);
+      // The Agent Deck preview never touches Botmancers, so prove the bogus
+      // sentinel Botmancers URL was ignored with the clone preview, which
+      // calls botmancers.getCapabilities(): a leaked http://127.0.0.1:9/
+      // endpoint would fail with 503 target_unavailable instead of 200.
+      const clonePreview = await fetch(
+        `${handle.plan.webUrl}api/v1/templates/${DEMO_CHOSEN_PROVIDER}/${DEMO_CHOSEN_EXTERNAL_ID}/clone/preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            policy: {
+              schemaVersion: "1.0.0",
+              creatorPermission: "granted",
+              redistribution: "private_only",
+              destination: "private",
+              instructionForm: "plain_text",
+            },
+          }),
+        },
+      );
+      expect(clonePreview.status).toBe(200);
       expect(stdout).toContain(`Browser URL: ${handle.plan.webUrl}`);
 
       expect(existsSync(handle.plan.catalogPath)).toBe(true);
