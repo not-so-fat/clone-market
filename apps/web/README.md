@@ -11,7 +11,25 @@ A first-time user starts at `/`, which explains Clone Market in plain language a
 
 The preview fetches the current normalized manifest on demand, maps it through the pure `@clone-market/agent-deck-preview` package (outside UI and route code), and groups deterministic playbook and MCP-service candidates with source-component traceability, readiness, retrieved-at time, unavailable-field disclosure, and a link back to the original Grok template. The preview registers nothing and persists nothing.
 
-Run locally with a configured catalog database:
+## Fixture demo
+
+The fastest way to try both entry paths is the one-command fixture demo from
+the repository root (no `.env.local`, no manual seeding, no live Marketplace
+access):
+
+```sh
+npm run demo
+```
+
+It rebuilds workspace packages, seeds isolated databases under
+`.temporal/demo/`, serves the captured Grok fixtures locally, and prints the
+browser URL with the sample Grok URL (`https://x.ai/bot/marketplace/bots/projects-manager`)
+and search query (`Projects Manager`). The demo is read-only, reruns
+idempotently, leaves operator configuration and data untouched, and stops
+cleanly on Ctrl-C. Provenance and “Original Grok template” links point at the
+local fixture source; fixture results do not prove the live contract.
+
+Run locally with a configured catalog database instead:
 
 ```sh
 npm run build

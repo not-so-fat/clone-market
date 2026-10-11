@@ -24,6 +24,16 @@ describe("demo CLI arguments [agent]", () => {
     expect(parseDemoArgs(["--skip-build"], {})).toEqual({ skipBuild: true });
   });
 
+  it("treats blank values as unset", () => {
+    expect(parseDemoArgs([], {
+      CLONE_MARKET_DEMO_PORT: "",
+      CLONE_MARKET_DEMO_FIXTURE_PORT: "  ",
+      CLONE_MARKET_DEMO_DIR: "",
+      CLONE_MARKET_DEMO_DIST_DIR: "",
+    })).toEqual({});
+    expect(parseDemoArgs(["--port", ""], {})).toEqual({});
+  });
+
   it("reads CLONE_MARKET_DEMO_* environment with flags winning", () => {
     expect(parseDemoArgs([], {
       CLONE_MARKET_DEMO_PORT: "3210",

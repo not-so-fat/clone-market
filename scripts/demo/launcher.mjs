@@ -73,11 +73,12 @@ export function parseDemoArgs(argv, environment = process.env) {
     const match = argv.find((arg) => arg.startsWith(`${name}=`));
     return match === undefined ? undefined : match.slice(name.length + 1);
   };
-  const rawPort = optionValue(argv, "--port") ?? inline("--port") ?? environment.CLONE_MARKET_DEMO_PORT;
-  const rawFixturePort = optionValue(argv, "--fixture-port") ?? inline("--fixture-port") ?? environment.CLONE_MARKET_DEMO_FIXTURE_PORT;
-  const rawDemoDir = optionValue(argv, "--demo-dir") ?? inline("--demo-dir") ?? environment.CLONE_MARKET_DEMO_DIR;
+  const blankToUndefined = (value) => (value === undefined || value.trim().length === 0 ? undefined : value);
+  const rawPort = blankToUndefined(optionValue(argv, "--port") ?? inline("--port") ?? environment.CLONE_MARKET_DEMO_PORT);
+  const rawFixturePort = blankToUndefined(optionValue(argv, "--fixture-port") ?? inline("--fixture-port") ?? environment.CLONE_MARKET_DEMO_FIXTURE_PORT);
+  const rawDemoDir = blankToUndefined(optionValue(argv, "--demo-dir") ?? inline("--demo-dir") ?? environment.CLONE_MARKET_DEMO_DIR);
   // Hidden test hook: lets parallel launcher tests use disjoint Next caches.
-  const rawDistDir = environment.CLONE_MARKET_DEMO_DIST_DIR;
+  const rawDistDir = blankToUndefined(environment.CLONE_MARKET_DEMO_DIST_DIR);
   return {
     ...(rawPort === undefined ? {} : { webPort: checkPortNumber(rawPort, "web port") }),
     ...(rawFixturePort === undefined ? {} : { fixturePort: checkPortNumber(rawFixturePort, "fixture port") }),
@@ -121,9 +122,10 @@ export function demoUsage() {
  */
 export function planDemo({ root, demoRoot, webPort, fixturePort, host = DEMO_HOST, nextDistDirName = DEMO_NEXT_DIST_DIR }) {
   const resolvedRoot = resolve(root);
-  const resolvedDemoRoot = isAbsolute(demoRoot ?? "")
-    ? resolve(demoRoot)
-    : resolve(resolvedRoot, demoRoot ?? DEMO_DIR_NAME);
+  const effectiveDemoRoot = demoRoot === undefined || demoRoot.trim().length === 0 ? DEMO_DIR_NAME : demoRoot;
+  const resolvedDemoRoot = isAbsolute(effectiveDemoRoot)
+    ? resolve(effectiveDemoRoot)
+    : resolve(resolvedRoot, effectiveDemoRoot);
   const validatedDistDirName = checkDemoDistDirName(nextDistDirName);
   const webDir = join(resolvedRoot, "apps", "web");
   const catalogPath = join(resolvedDemoRoot, DEMO_CATALOG_DATABASE);

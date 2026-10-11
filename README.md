@@ -16,6 +16,7 @@ Clone Market uses Node.js 22.5 or newer (for the built-in SQLite API), TypeScrip
 | Command | Purpose |
 | --- | --- |
 | `npm ci` | Reproduce the dependency tree from `package-lock.json`. |
+| `npm run demo` | One-command fixture-backed browser demo (network-free after `npm ci`). |
 | `npm run typecheck` | Build and type-check the core package and external consumer fixture. |
 | `npm test` | Run contract, public-consumer, package-boundary, and offline V0 acceptance tests (network-free). |
 | `npm run lint` | Check package boundaries and TypeScript source hygiene. |
@@ -30,6 +31,57 @@ adapter live in `@clone-market/catalog`. See [ADR 0001](docs/decisions/0001-pack
 Reviewed public signals, deduplication, and inspectable adoption-label derivation
 live in `@clone-market/evidence`. The Next.js catalog, inspector, and reviewed
 Botmancers clone flow live in `@clone-market/web`.
+
+## Demo
+
+From a clean checkout with dependencies installed, one command launches a
+working browser demo of the URL/search → “Would register” trial flow:
+
+```sh
+npm ci
+npm run demo
+```
+
+The launcher rebuilds workspace packages from the current checkout, seeds an
+isolated fixture catalog and reviewed-evidence database under `.temporal/demo/`,
+serves the captured Grok fixtures from a local source (no external network),
+and starts the web app on an isolated Next.js cache. When ready it prints the
+browser URL plus the sample inputs:
+
+```text
+Clone Market demo is ready.
+Browser URL: http://127.0.0.1:3100/
+Sample Grok URL: https://x.ai/bot/marketplace/bots/projects-manager
+Sample search query: Projects Manager
+This demo is read-only; registers nothing.
+Press Ctrl-C to stop.
+```
+
+Paste the sample URL or search the sample query: both entry paths render the
+same populated “Would register” preview. The server stays in the foreground;
+Ctrl-C stops the fixture source and web app and releases both ports.
+
+Notes:
+
+- Deterministic and network-free after `npm ci`. Reruns reuse the same demo
+  directory idempotently (upsert; nothing is duplicated).
+- Read-only: the preview registers nothing in Agent Deck or elsewhere.
+- Fixture-backed: catalog provenance and “Original Grok template” links point
+  at the local fixture source, and fixture results do not prove the current
+  live Grok Marketplace contract.
+- Isolated: the demo never reads or writes `apps/web/.env.local`,
+  `data/catalog.sqlite`, `data/evidence.sqlite`, operator artifact
+  directories, or the normal `.next` cache. All demo state stays under
+  `.temporal/demo/` (plus the `apps/web/.next-demo` cache).
+- Ports default to 3100 (web) and 3101 (fixture source); override with
+  `--port`, `--fixture-port`, `--demo-dir`, or the `CLONE_MARKET_DEMO_PORT` /
+  `CLONE_MARKET_DEMO_FIXTURE_PORT` / `CLONE_MARKET_DEMO_DIR` variables.
+  Occupied ports, Node below 22.5, missing dependencies, and seed failures
+  exit before launching with a one-line fix.
+
+The live/operator acceptance sequence (`npm run smoke:v0:live` plus a
+configured `next dev`) remains a separate path; see
+[V0 acceptance runbook](docs/acceptance-v0.md).
 
 ## Status
 

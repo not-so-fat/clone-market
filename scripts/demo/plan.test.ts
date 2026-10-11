@@ -52,6 +52,11 @@ describe("demo plan [agent]", () => {
     }
   });
 
+  it("treats a blank demo root as the default", () => {
+    const plan = planDemo({ root: ROOT, demoRoot: "  " });
+    expect(plan.demoRoot).toBe(join(resolve(ROOT), DEMO_DIR_NAME));
+  });
+
   it("honors absolute overrides without touching operator paths", () => {
     const demoRoot = mkdtempSync(join(tmpdir(), "demo-plan-"));
     temporary.push(demoRoot);
