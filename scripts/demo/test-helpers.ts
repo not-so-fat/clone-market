@@ -27,12 +27,20 @@ export async function allocatePort(host = "127.0.0.1"): Promise<number> {
 
 /** Assert an HTTP listener is gone (post-shutdown port check). */
 export async function expectConnectionRefused(url: string): Promise<void> {
-  const failure = await fetch(url).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(TypeError);
-  expect((failure as { cause?: { code?: string } }).cause?.code).toBe("ECONNREFUSED");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const failure = await fetch(url).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(TypeError);
+    const code = (failure as { cause?: { code?: string } }).cause?.code;
+    if (code === "ECONNREFUSED") return;
+    // A fetch against a just-closed listener can reuse a stale pooled
+    // keep-alive socket (UND_ERR_SOCKET) instead of opening a fresh
+    // connection; retry so the check observes the released port.
+    expect(code).toBe("UND_ERR_SOCKET");
+  }
+  throw new Error(`expected ECONNREFUSED from released port: ${url}`);
 }
 
 export type OpenMarket = {
