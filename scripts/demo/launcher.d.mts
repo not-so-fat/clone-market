@@ -1,7 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import type { DemoError } from "./errors.mjs";
 
-export declare function resolveRepoRoot(environment?: NodeJS.ProcessEnv): string;
+export type DemoEnvironment = { [variable: string]: string | undefined };
+
+export declare function resolveRepoRoot(environment?: DemoEnvironment): string;
 
 export type ParsedDemoArgs =
   | { help: true }
@@ -12,7 +14,7 @@ export type ParsedDemoArgs =
       skipBuild?: true;
     };
 
-export declare function parseDemoArgs(argv: string[], environment?: NodeJS.ProcessEnv): ParsedDemoArgs;
+export declare function parseDemoArgs(argv: string[], environment?: DemoEnvironment): ParsedDemoArgs;
 export declare function demoUsage(): string;
 
 export type DemoPlan = {
@@ -44,7 +46,7 @@ export declare function buildWorkspacePackages(input: {
   stderr: (chunk: string) => void;
 }): Promise<void>;
 export declare function cleanDemoNextDir(plan: DemoPlan, stderr: (chunk: string) => void): Promise<void>;
-export declare function webChildEnv(plan: DemoPlan, environment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export declare function webChildEnv(plan: DemoPlan, environment?: DemoEnvironment): NodeJS.ProcessEnv;
 
 export declare function stopChild(
   child: ChildProcess,
@@ -92,5 +94,5 @@ export declare function runDemo(options?: {
   stdout?: (chunk: string) => void;
   stderr?: (chunk: string) => void;
   version?: string;
-  environment?: NodeJS.ProcessEnv;
+  environment?: DemoEnvironment;
 }): Promise<DemoHandle>;
