@@ -35,7 +35,21 @@ describe("demo plan [agent]", () => {
     expect(plan.fixturePort).toBe(DEMO_DEFAULT_FIXTURE_PORT);
     expect(plan.webUrl).toBe(`http://127.0.0.1:${DEMO_DEFAULT_WEB_PORT}/`);
     expect(plan.fixtureBaseUrl).toBe(`http://127.0.0.1:${DEMO_DEFAULT_FIXTURE_PORT}/bot/marketplace/`);
+    expect(plan.nextDistDirName).toBe(".next-demo");
     expect(plan.nextDistDir).toBe(join(plan.webDir, ".next-demo"));
+  });
+
+  it("accepts suffixed demo caches and rejects anything else", () => {
+    const plan = planDemo({ root: ROOT, nextDistDirName: ".next-demo-test-1" });
+    expect(plan.nextDistDir).toBe(join(plan.webDir, ".next-demo-test-1"));
+    for (const name of [".next", "dist", ".next-demo-", "../escape", ".next-demo/../escape", ""]) {
+      try {
+        planDemo({ root: ROOT, nextDistDirName: name });
+        expect.unreachable(`dist dir ${name} should be rejected`);
+      } catch (error) {
+        expect((error as DemoError).code).toBe("demo_invalid_args");
+      }
+    }
   });
 
   it("honors absolute overrides without touching operator paths", () => {
@@ -60,6 +74,7 @@ describe("demo plan [agent]", () => {
       CLONE_MARKET_BOTMANCERS_UI_BASE_URL: "http://127.0.0.1:43123/",
     });
     expect(env.CLONE_MARKET_DEMO).toBe("1");
+    expect(env.CLONE_MARKET_DEMO_DIST_DIR).toBe(".next-demo");
     expect(env.CLONE_MARKET_CATALOG_DB).toBe(plan.catalogPath);
     expect(env.CLONE_MARKET_EVIDENCE_DB).toBe(plan.evidencePath);
     expect(env.CLONE_MARKET_ARTIFACT_DIR).toBe(plan.artifactDir);

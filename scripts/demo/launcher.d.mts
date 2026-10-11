@@ -11,11 +11,13 @@ export type ParsedDemoArgs =
       webPort?: number;
       fixturePort?: number;
       demoDir?: string;
+      demoDistDir?: string;
       skipBuild?: true;
     };
 
 export declare function parseDemoArgs(argv: string[], environment?: DemoEnvironment): ParsedDemoArgs;
 export declare function demoUsage(): string;
+export declare function checkDemoDistDirName(value: string): string;
 
 export type DemoPlan = {
   root: string;
@@ -29,6 +31,7 @@ export type DemoPlan = {
   fixturePort: number;
   webUrl: string;
   fixtureBaseUrl: string;
+  nextDistDirName: string;
   nextDistDir: string;
 };
 
@@ -38,6 +41,7 @@ export declare function planDemo(input: {
   webPort?: number;
   fixturePort?: number;
   host?: string;
+  nextDistDirName?: string;
 }): DemoPlan;
 
 export declare function ensureDemoRootWritable(plan: DemoPlan): Promise<void>;
@@ -86,6 +90,7 @@ export declare function runDemo(options?: {
   demoRoot?: string;
   webPort?: number;
   fixturePort?: number;
+  demoDistDir?: string;
   host?: string;
   skipBuild?: boolean;
   readyTimeoutMs?: number;

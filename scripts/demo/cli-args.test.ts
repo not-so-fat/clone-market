@@ -31,6 +31,13 @@ describe("demo CLI arguments [agent]", () => {
       CLONE_MARKET_DEMO_DIR: "/tmp/env-demo",
     })).toEqual({ webPort: 3210, fixturePort: 3211, demoDir: "/tmp/env-demo" });
     expect(parseDemoArgs(["--port", "3220"], { CLONE_MARKET_DEMO_PORT: "3210" })).toEqual({ webPort: 3220 });
+    expect(parseDemoArgs([], { CLONE_MARKET_DEMO_DIST_DIR: ".next-demo-x" })).toEqual({ demoDistDir: ".next-demo-x" });
+    try {
+      parseDemoArgs([], { CLONE_MARKET_DEMO_DIST_DIR: ".next" });
+      expect.unreachable("invalid dist dir should fail parsing");
+    } catch (error) {
+      expect((error as DemoError).code).toBe("demo_invalid_args");
+    }
   });
 
   it("rejects unknown options, missing values, and invalid ports", () => {

@@ -76,12 +76,29 @@ export function parseDemoArgs(argv, environment = process.env) {
   const rawPort = optionValue(argv, "--port") ?? inline("--port") ?? environment.CLONE_MARKET_DEMO_PORT;
   const rawFixturePort = optionValue(argv, "--fixture-port") ?? inline("--fixture-port") ?? environment.CLONE_MARKET_DEMO_FIXTURE_PORT;
   const rawDemoDir = optionValue(argv, "--demo-dir") ?? inline("--demo-dir") ?? environment.CLONE_MARKET_DEMO_DIR;
+  // Hidden test hook: lets parallel launcher tests use disjoint Next caches.
+  const rawDistDir = environment.CLONE_MARKET_DEMO_DIST_DIR;
   return {
     ...(rawPort === undefined ? {} : { webPort: checkPortNumber(rawPort, "web port") }),
     ...(rawFixturePort === undefined ? {} : { fixturePort: checkPortNumber(rawFixturePort, "fixture port") }),
     ...(rawDemoDir === undefined ? {} : { demoDir: rawDemoDir }),
+    ...(rawDistDir === undefined ? {} : { demoDistDir: checkDemoDistDirName(rawDistDir) }),
     ...(argv.includes("--skip-build") ? { skipBuild: true } : {}),
   };
+}
+
+/**
+ * Validate a demo Next.js cache directory name. Only `.next-demo` plus
+ * suffixed variants are accepted so cleanup can never escape to the normal
+ * `.next` directory or anywhere else.
+ */
+export function checkDemoDistDirName(value) {
+  if (value === DEMO_NEXT_DIST_DIR || /^\.next-demo-[0-9A-Za-z._~-]+$/.test(value)) return value;
+  throw new DemoError(
+    "demo_invalid_args",
+    `Invalid demo Next directory "${value}": expected ${DEMO_NEXT_DIST_DIR} or a ${DEMO_NEXT_DIST_DIR}-<suffix> variant.`,
+    "unset CLONE_MARKET_DEMO_DIST_DIR or use a .next-demo-<suffix> name.",
+  );
 }
 
 export function demoUsage() {
@@ -102,11 +119,12 @@ export function demoUsage() {
  * Compute every derived demo path. Pure: no filesystem access, no operator
  * paths. All database, artifact, and cache paths stay under demoRoot.
  */
-export function planDemo({ root, demoRoot, webPort, fixturePort, host = DEMO_HOST }) {
+export function planDemo({ root, demoRoot, webPort, fixturePort, host = DEMO_HOST, nextDistDirName = DEMO_NEXT_DIST_DIR }) {
   const resolvedRoot = resolve(root);
   const resolvedDemoRoot = isAbsolute(demoRoot ?? "")
     ? resolve(demoRoot)
     : resolve(resolvedRoot, demoRoot ?? DEMO_DIR_NAME);
+  const validatedDistDirName = checkDemoDistDirName(nextDistDirName);
   const webDir = join(resolvedRoot, "apps", "web");
   const catalogPath = join(resolvedDemoRoot, DEMO_CATALOG_DATABASE);
   const evidencePath = join(resolvedDemoRoot, DEMO_EVIDENCE_DATABASE);
@@ -135,7 +153,8 @@ export function planDemo({ root, demoRoot, webPort, fixturePort, host = DEMO_HOS
     fixturePort: resolvedFixturePort,
     webUrl: `http://${host}:${resolvedWebPort}/`,
     fixtureBaseUrl: `http://${host}:${resolvedFixturePort}/bot/marketplace/`,
-    nextDistDir: join(webDir, DEMO_NEXT_DIST_DIR),
+    nextDistDirName: validatedDistDirName,
+    nextDistDir: join(webDir, validatedDistDirName),
   };
 }
 
@@ -194,7 +213,7 @@ export async function buildWorkspacePackages({ root, stderr }) {
  * recompiles from source by content hash regardless).
  */
 export async function cleanDemoNextDir(plan, stderr) {
-  if (relative(plan.webDir, plan.nextDistDir) !== DEMO_NEXT_DIST_DIR) {
+  if (relative(plan.webDir, plan.nextDistDir) !== plan.nextDistDirName || checkDemoDistDirName(plan.nextDistDirName) !== plan.nextDistDirName) {
     throw new DemoError(
       "demo_invalid_args",
       `Refusing to clean unexpected Next directory ${plan.nextDistDir}.`,
@@ -230,6 +249,7 @@ export function webChildEnv(plan, environment = process.env) {
   return {
     ...rest,
     CLONE_MARKET_DEMO: "1",
+    CLONE_MARKET_DEMO_DIST_DIR: plan.nextDistDirName,
     CLONE_MARKET_CATALOG_DB: plan.catalogPath,
     CLONE_MARKET_EVIDENCE_DB: plan.evidencePath,
     CLONE_MARKET_ARTIFACT_DIR: plan.artifactDir,
@@ -332,6 +352,7 @@ export async function runDemo(options = {}) {
     demoRoot,
     webPort,
     fixturePort,
+    demoDistDir,
     host = DEMO_HOST,
     skipBuild = false,
     readyTimeoutMs = 180_000,
@@ -342,7 +363,14 @@ export async function runDemo(options = {}) {
     version = options.environment?.CLONE_MARKET_DEMO_NODE_VERSION ?? process.versions.node,
   } = options;
 
-  const plan = planDemo({ root, demoRoot, webPort, fixturePort, host });
+  const plan = planDemo({
+    root,
+    demoRoot,
+    webPort,
+    fixturePort,
+    host,
+    ...(demoDistDir === undefined ? {} : { nextDistDirName: demoDistDir }),
+  });
   checkNodeVersion(version);
   await checkDependencies(plan.root);
   await ensureDemoRootWritable(plan);

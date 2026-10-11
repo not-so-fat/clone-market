@@ -28,6 +28,7 @@ async function main(argv) {
       ...(args.webPort === undefined ? {} : { webPort: args.webPort }),
       ...(args.fixturePort === undefined ? {} : { fixturePort: args.fixturePort }),
       ...(args.demoDir === undefined ? {} : { demoRoot: args.demoDir }),
+      ...(args.demoDistDir === undefined ? {} : { demoDistDir: args.demoDistDir }),
       ...(args.skipBuild === true ? { skipBuild: true } : {}),
       handleSignals: true,
       environment,
