@@ -23,7 +23,8 @@
     "test:web": "vitest run apps/web",
     "smoke:v0": "npm run build && vitest run apps/web/src/acceptance apps/web/src/botmancers-url.test.ts && vite-node apps/web/src/acceptance/cli.ts",
     "smoke:v0:live": "npm run build && CLONE_MARKET_ACCEPTANCE_LIVE=1 vite-node apps/web/src/acceptance/cli.ts -- --live",
-    "evidence:derive": "vite-node packages/evidence/src/derive-cli.ts --"
+    "evidence:derive": "vite-node packages/evidence/src/derive-cli.ts --",
+    "demo": "node scripts/demo/cli.mjs"
   },
   "devDependencies": {
     "@types/node": "20.19.11",

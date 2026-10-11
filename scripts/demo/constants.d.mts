@@ -1,0 +1,17 @@
+export declare const DEMO_SAMPLE_GROK_URL: string;
+export declare const DEMO_SAMPLE_SEARCH_QUERY: string;
+export declare const DEMO_READONLY_STATEMENT: string;
+export declare const DEMO_DEFAULT_WEB_PORT: number;
+export declare const DEMO_DEFAULT_FIXTURE_PORT: number;
+export declare const DEMO_DIR_NAME: string;
+export declare const DEMO_CATALOG_DATABASE: string;
+export declare const DEMO_EVIDENCE_DATABASE: string;
+export declare const DEMO_ARTIFACT_DIR_NAME: string;
+export declare const DEMO_SEED_NOW: string;
+export declare const DEMO_NEXT_DIST_DIR: string;
+export declare const DEMO_MIN_NODE_MAJOR: number;
+export declare const DEMO_MIN_NODE_MINOR: number;
+export declare const DEMO_CHOSEN_PROVIDER: string;
+export declare const DEMO_CHOSEN_EXTERNAL_ID: string;
+export declare const DEMO_CHOSEN_SLUG: string;
+export declare const DEMO_CHOSEN_TEMPLATE_ID: string;

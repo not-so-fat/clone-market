@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 coverage/
 .next/
+.next-demo/
 .DS_Store
 .temporal/
 /data/

@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 const config: NextConfig = {
   output: "standalone",
+  // The fixture demo (CLONE_MARKET_DEMO=1) uses an isolated cache so stale
+  // normal-development bundles can never mask the checked-out code.
+  distDir: process.env.CLONE_MARKET_DEMO === "1" ? ".next-demo" : ".next",
   outputFileTracingRoot: fileURLToPath(new URL("../..", import.meta.url)),
   serverExternalPackages: [
     "@clone-market/catalog",
